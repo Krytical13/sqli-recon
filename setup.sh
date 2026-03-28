@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # sqli_recon installer
-# Usage: ./setup.sh [--with-headless]
+# Detects OS, installs system prerequisites, creates venv, installs everything.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$SCRIPT_DIR/.venv"
@@ -25,38 +25,143 @@ done
 echo "=== sqli_recon setup ==="
 echo ""
 
-# 1. Python check
+# ---- Detect package manager ----
+
+PKG_MGR=""
+INSTALL_CMD=""
+SUDO=""
+
+if [ "$(id -u)" -ne 0 ]; then
+    SUDO="sudo"
+fi
+
+detect_pkg_manager() {
+    if command -v apt-get &>/dev/null; then
+        PKG_MGR="apt"
+        INSTALL_CMD="$SUDO apt-get install -y"
+    elif command -v dnf &>/dev/null; then
+        PKG_MGR="dnf"
+        INSTALL_CMD="$SUDO dnf install -y"
+    elif command -v yum &>/dev/null; then
+        PKG_MGR="yum"
+        INSTALL_CMD="$SUDO yum install -y"
+    elif command -v pacman &>/dev/null; then
+        PKG_MGR="pacman"
+        INSTALL_CMD="$SUDO pacman -S --noconfirm"
+    elif command -v zypper &>/dev/null; then
+        PKG_MGR="zypper"
+        INSTALL_CMD="$SUDO zypper install -y"
+    elif command -v apk &>/dev/null; then
+        PKG_MGR="apk"
+        INSTALL_CMD="$SUDO apk add"
+    elif command -v brew &>/dev/null; then
+        PKG_MGR="brew"
+        INSTALL_CMD="brew install"
+    fi
+}
+
+detect_pkg_manager
+
+# Map package names per distro
+pkg_python() {
+    case "$PKG_MGR" in
+        apt)    echo "python3 python3-venv python3-pip python3-dev" ;;
+        dnf|yum) echo "python3 python3-pip python3-devel" ;;
+        pacman) echo "python python-pip" ;;
+        zypper) echo "python3 python3-pip python3-devel" ;;
+        apk)    echo "python3 py3-pip python3-dev" ;;
+        brew)   echo "python3" ;;
+        *)      echo "" ;;
+    esac
+}
+
+pkg_build_deps() {
+    # lxml needs C compiler + libxml2/libxslt headers
+    case "$PKG_MGR" in
+        apt)    echo "build-essential libxml2-dev libxslt1-dev" ;;
+        dnf|yum) echo "gcc libxml2-devel libxslt-devel" ;;
+        pacman) echo "base-devel libxml2 libxslt" ;;
+        zypper) echo "gcc libxml2-devel libxslt-devel" ;;
+        apk)    echo "gcc musl-dev libxml2-dev libxslt-dev" ;;
+        brew)   echo "libxml2 libxslt" ;;
+        *)      echo "" ;;
+    esac
+}
+
+# ---- Install system prerequisites ----
+
+install_if_missing() {
+    local description="$1"
+    local check_cmd="$2"
+    local packages="$3"
+
+    if eval "$check_cmd" &>/dev/null; then
+        echo "[+] $description: already installed"
+        return 0
+    fi
+
+    if [ -z "$PKG_MGR" ]; then
+        echo "[-] $description: missing, and no supported package manager found."
+        echo "    Please install manually: $packages"
+        return 1
+    fi
+
+    echo "[*] Installing $description..."
+    if [ "$PKG_MGR" = "apt" ]; then
+        $SUDO apt-get update -qq 2>/dev/null
+    fi
+    $INSTALL_CMD $packages 2>&1 | tail -3
+    echo "[+] $description: installed"
+}
+
+# Python 3.8+
+install_if_missing \
+    "Python 3" \
+    "python3 --version" \
+    "$(pkg_python)"
+
+# After installing, find the right python binary
 PYTHON=""
 for cmd in python3 python; do
     if command -v "$cmd" &>/dev/null; then
-        version=$("$cmd" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
-        major=$("$cmd" -c "import sys; print(sys.version_info.major)" 2>/dev/null)
-        minor=$("$cmd" -c "import sys; print(sys.version_info.minor)" 2>/dev/null)
+        major=$("$cmd" -c "import sys; print(sys.version_info.major)" 2>/dev/null || echo 0)
+        minor=$("$cmd" -c "import sys; print(sys.version_info.minor)" 2>/dev/null || echo 0)
         if [ "$major" -ge 3 ] && [ "$minor" -ge 8 ]; then
             PYTHON="$cmd"
-            echo "[+] Python $version found ($cmd)"
             break
         fi
     fi
 done
 
 if [ -z "$PYTHON" ]; then
-    echo "[-] Python 3.8+ is required but not found."
-    echo "    Install it with your package manager:"
-    echo "      Debian/Ubuntu: sudo apt install python3 python3-venv python3-pip"
-    echo "      Fedora:        sudo dnf install python3"
-    echo "      Arch:          sudo pacman -S python"
+    echo "[-] Python 3.8+ is required but could not be found after install attempt."
     exit 1
 fi
 
-# 2. venv check
-if ! "$PYTHON" -c "import venv" &>/dev/null; then
-    echo "[-] python3-venv is required."
-    echo "    Install it with: sudo apt install python3-venv"
-    exit 1
-fi
+version=$("$PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+echo "[+] Using Python $version ($PYTHON)"
 
-# 3. Create virtual environment
+# python3-venv (separate package on Debian/Ubuntu)
+install_if_missing \
+    "python3-venv" \
+    "$PYTHON -c 'import venv'" \
+    "$(pkg_python)"
+
+# pip (sometimes missing on minimal installs)
+install_if_missing \
+    "pip" \
+    "$PYTHON -m pip --version" \
+    "$(pkg_python)"
+
+# Build dependencies for lxml (C extension)
+install_if_missing \
+    "Build tools (for lxml)" \
+    "xml2-config --version" \
+    "$(pkg_build_deps)"
+
+# ---- Create virtual environment ----
+
+echo ""
 if [ ! -d "$VENV_DIR" ]; then
     echo "[+] Creating virtual environment..."
     "$PYTHON" -m venv "$VENV_DIR"
@@ -64,41 +169,62 @@ else
     echo "[+] Virtual environment exists"
 fi
 
-# 4. Activate and install
 source "$VENV_DIR/bin/activate"
+
+# ---- Install Python packages ----
 
 echo "[+] Installing sqli_recon and dependencies..."
 pip install --upgrade pip -q 2>/dev/null
 pip install -e "$SCRIPT_DIR" -q 2>&1 | tail -1
 
-# 5. Optional: Playwright for headless SPA crawling
+# ---- Optional: Playwright ----
+
 if [ "$WITH_HEADLESS" = true ]; then
     echo "[+] Installing Playwright..."
     pip install playwright -q 2>&1 | tail -1
+
+    # Playwright needs browser binaries + system deps
+    echo "[+] Installing Playwright system dependencies..."
+    if [ "$PKG_MGR" = "apt" ]; then
+        # playwright install-deps installs the right libs for the OS
+        $SUDO "$VENV_DIR/bin/playwright" install-deps chromium 2>&1 | tail -3
+    fi
+
     echo "[+] Installing Chromium browser (this may take a minute)..."
-    playwright install chromium 2>&1 | tail -2
+    "$VENV_DIR/bin/playwright" install chromium 2>&1 | tail -2
     echo "[+] Headless SPA crawling enabled"
 else
     echo "[*] Headless mode skipped (run with --with-headless to enable)"
 fi
 
-# 6. Verify installation
+# ---- Verify ----
+
 echo ""
 echo "[+] Verifying installation..."
 ERRORS=0
 
-"$VENV_DIR/bin/python" -c "from sqli_recon.cli import main" 2>/dev/null || { echo "[-] Import check failed"; ERRORS=1; }
-"$VENV_DIR/bin/python" -c "import requests, bs4, lxml" 2>/dev/null || { echo "[-] Dependency check failed"; ERRORS=1; }
+"$VENV_DIR/bin/python" -c "from sqli_recon.cli import main" 2>/dev/null \
+    && echo "    sqli_recon .... ok" \
+    || { echo "    sqli_recon .... FAILED"; ERRORS=1; }
+
+"$VENV_DIR/bin/python" -c "import requests, bs4, lxml" 2>/dev/null \
+    && echo "    dependencies .. ok" \
+    || { echo "    dependencies .. FAILED"; ERRORS=1; }
 
 if [ "$WITH_HEADLESS" = true ]; then
-    "$VENV_DIR/bin/python" -c "from playwright.sync_api import sync_playwright" 2>/dev/null || { echo "[-] Playwright check failed"; ERRORS=1; }
+    "$VENV_DIR/bin/python" -c "from playwright.sync_api import sync_playwright" 2>/dev/null \
+        && echo "    playwright .... ok" \
+        || { echo "    playwright .... FAILED"; ERRORS=1; }
 fi
 
-if [ "$ERRORS" -eq 0 ]; then
-    echo "[+] All checks passed"
+if [ "$ERRORS" -ne 0 ]; then
+    echo ""
+    echo "[-] Some checks failed. Review the output above."
+    exit 1
 fi
 
-# 7. Create wrapper script
+# ---- Create wrapper script ----
+
 WRAPPER="$SCRIPT_DIR/scan"
 cat > "$WRAPPER" << 'WRAPPER_EOF'
 #!/usr/bin/env bash
@@ -112,8 +238,8 @@ echo ""
 echo "=== Setup complete ==="
 echo ""
 echo "Usage:"
-echo "  ./scan -u https://target.com                  # Standard scan"
-echo "  ./scan -u https://target.com --tor             # Scan via Tor"
+echo "  ./scan -u https://target.com                  # Full scan"
+echo "  ./scan -u https://target.com --tor             # Via Tor"
 echo "  ./scan -u https://target.com --quick           # Fast recon only"
 echo "  ./scan -u https://target.com -o ./results      # Custom output dir"
 echo ""
