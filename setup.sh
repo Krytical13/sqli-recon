@@ -162,6 +162,14 @@ install_if_missing \
 # ---- Create virtual environment ----
 
 echo ""
+if [ -d "$VENV_DIR" ]; then
+    # Verify existing venv is usable (activate script exists and python works)
+    if [ ! -f "$VENV_DIR/bin/activate" ] || ! "$VENV_DIR/bin/python" --version &>/dev/null; then
+        echo "[*] Existing virtual environment is broken, recreating..."
+        rm -rf "$VENV_DIR"
+    fi
+fi
+
 if [ ! -d "$VENV_DIR" ]; then
     echo "[+] Creating virtual environment..."
     "$PYTHON" -m venv "$VENV_DIR"
