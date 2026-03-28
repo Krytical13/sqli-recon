@@ -215,8 +215,14 @@ def main():
             print(f"  {C.CYAN}Tor mode:{C.RESET} {tor_routing}, timeout={timeout}s, "
                   f"rate_limit={rate_limit}s, ssl_verify=off")
 
-    # Output directory
-    output_dir = args.output or "sqli_recon_output"
+    # Output directory — unique per target by default to avoid conflicts
+    if args.output:
+        output_dir = args.output
+    else:
+        # Generate a name from the target: scheme_host_timestamp
+        safe_host = parsed.netloc.replace(":", "_").replace(".", "-")
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        output_dir = f"sqli_recon_{safe_host}_{timestamp}"
 
     # Print config
     if not args.quiet and not args.json_only:
