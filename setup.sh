@@ -141,29 +141,32 @@ fi
 version=$("$PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 echo "[+] Using Python $version ($PYTHON)"
 
-# python3-venv — on Debian/Ubuntu this is version-specific (e.g. python3.11-venv)
-if ! "$PYTHON" -c "import venv" &>/dev/null; then
-    echo "[*] Installing python3-venv..."
+# python3-venv + ensurepip — on Debian/Ubuntu these come from python3.X-venv
+# "import venv" can succeed even when ensurepip is missing, so we test by
+# actually creating a throwaway venv.
+PY_VER=$("$PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+VENV_TEST_DIR=$(mktemp -d)
+if "$PYTHON" -m venv "$VENV_TEST_DIR/test" &>/dev/null; then
+    echo "[+] python3-venv: already installed"
+else
+    echo "[*] Installing python${PY_VER}-venv..."
     if [ "$PKG_MGR" = "apt" ]; then
-        # Try version-specific package first (python3.11-venv), then generic
-        PY_VER=$("$PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
         $SUDO apt-get update -qq 2>/dev/null
         $INSTALL_CMD "python${PY_VER}-venv" 2>/dev/null \
             || $INSTALL_CMD python3-venv 2>/dev/null \
-            || { echo "[-] Failed to install python3-venv. Try: sudo apt install python${PY_VER}-venv"; exit 1; }
+            || { echo "[-] Failed. Try: sudo apt install python${PY_VER}-venv"; exit 1; }
     elif [ -n "$INSTALL_CMD" ]; then
         $INSTALL_CMD $(pkg_python) 2>/dev/null
     fi
-    # Verify it worked
-    if ! "$PYTHON" -c "import venv" &>/dev/null; then
-        echo "[-] python3-venv still not available after install."
+    # Verify it actually works now
+    if ! "$PYTHON" -m venv "$VENV_TEST_DIR/test2" &>/dev/null; then
+        echo "[-] python3-venv still broken after install."
         echo "    Try manually: sudo apt install python${PY_VER}-venv"
         exit 1
     fi
-    echo "[+] python3-venv: installed"
-else
-    echo "[+] python3-venv: already installed"
+    echo "[+] python${PY_VER}-venv: installed"
 fi
+rm -rf "$VENV_TEST_DIR"
 
 # pip (sometimes missing on minimal installs)
 if ! "$PYTHON" -m pip --version &>/dev/null; then
