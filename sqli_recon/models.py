@@ -185,7 +185,7 @@ class Finding:
             parts = []
             for p in self.endpoint.parameters:
                 if p.location == ParamLocation.BODY:
-                    val = p.value or ""
+                    val = p.value if p.value else _placeholder_value(p)
                     parts.append(f"{p.name}={val}")
             return "&".join(parts)
 
