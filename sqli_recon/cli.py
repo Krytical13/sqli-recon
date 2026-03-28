@@ -504,14 +504,29 @@ def main():
         print(f"  {C.CYAN}JSON report:{C.RESET}    {result['report_file']}")
         print(f"  {C.CYAN}sqlmap commands:{C.RESET} {result['commands_file']}")
 
-        # Quick-start hint
+        # Quick-start hints — show the right command for what was found
         if findings:
+            from sqli_recon.models import ParamLocation
+            has_get = any(f.parameter.location in (ParamLocation.QUERY, ParamLocation.PATH) for f in findings)
+            has_post = any(f.parameter.location in (ParamLocation.BODY, ParamLocation.JSON) for f in findings)
+
             print(f"\n{C.BOLD}Quick start:{C.RESET}")
-            print(f"  {C.GREEN}sqlmap -m {result['urls_file']} --batch --smart{C.RESET}")
-            if any(f.risk_level == "HIGH" for f in findings):
-                top = next(f for f in findings if f.risk_level == "HIGH")
-                url = output_gen._build_marked_url(top)
-                print(f"  {C.GREEN}sqlmap -u \"{url}\" --batch --level=2{C.RESET}")
+            if has_get and result['urls_count'] > 0:
+                print(f"  {C.GREEN}sqlmap -m {result['urls_file']} --batch --smart{C.RESET}")
+            if has_post:
+                # Find the top POST finding and suggest its request file
+                top_post = next((f for f in findings if f.parameter.location in (ParamLocation.BODY, ParamLocation.JSON)), None)
+                if top_post:
+                    idx = findings.index(top_post)
+                    import os
+                    req_files = sorted(f for f in os.listdir(result['requests_dir']) if f.startswith(f"{idx+1:03d}_"))
+                    if req_files:
+                        req_path = os.path.join(result['requests_dir'], req_files[0])
+                        p_flag = f" -p {top_post.parameter.name}" if top_post.parameter.location == ParamLocation.JSON else ""
+                        print(f"  {C.GREEN}sqlmap -r \"{req_path}\"{p_flag} --batch --level=2{C.RESET}")
+            if not has_get and not has_post:
+                print(f"  {C.DIM}No actionable findings for sqlmap.{C.RESET}")
+            print(f"  {C.DIM}See {result['commands_file']} for all suggested commands{C.RESET}")
 
 
 def _url_to_endpoint(url, response, source):

@@ -79,11 +79,17 @@ class OutputGenerator:
     # ---- sqlmap URL list (for -m flag) ----
 
     def write_sqlmap_urls(self, path):
-        """Write sqlmap-compatible URLs with * injection markers."""
+        """Write sqlmap-compatible URLs with * injection markers.
+
+        Only includes GET query param and path param findings — POST body/JSON
+        params can't be expressed as URLs and must use -r request files instead.
+        """
         urls = []
         seen = set()
 
         for finding in self.findings:
+            if finding.parameter.location in (ParamLocation.BODY, ParamLocation.JSON):
+                continue  # POST params need -r request files, not URLs
             url = self._build_marked_url(finding)
             if url and url not in seen:
                 seen.add(url)
