@@ -1,0 +1,15 @@
+# Isolated Tor instance for sqli_recon testing
+# Completely separate from system Tor on port 9050
+
+SocksPort 19050
+DataDirectory /home/krytical/projects/sqli/tests/tor_data/data
+
+# Hidden service -> vulnerable test app
+HiddenServiceDir /home/krytical/projects/sqli/tests/tor_data/hidden_service
+HiddenServicePort 80 127.0.0.1:18484
+
+# Logging
+Log notice file /home/krytical/projects/sqli/tests/tor_data/tor.log
+
+# Don't be a relay
+ExitRelay 0

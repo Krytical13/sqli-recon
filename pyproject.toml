@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sqli-recon"
+version = "0.1.0"
+description = "Active SQL injection surface discovery tool"
+requires-python = ">=3.8"
+dependencies = [
+    "requests>=2.28.0",
+    "requests[socks]>=2.28.0",
+    "beautifulsoup4>=4.11.0",
+    "lxml>=4.9.0",
+    "urllib3>=1.26.0",
+]
+
+[project.optional-dependencies]
+headless = ["playwright>=1.40.0"]
+
+[project.scripts]
+sqli-recon = "sqli_recon.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["sqli_recon*"]

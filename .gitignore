@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+sqli_recon.egg-info/
+sqli_recon_output/
+scan
+tests/tor_data/data/
+tests/tor_data/hidden_service/
+tests/tor_data/tor.log
+tests/scan_results/
+tests/tor_scan_results/
