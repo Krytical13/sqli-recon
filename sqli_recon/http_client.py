@@ -79,6 +79,9 @@ class HttpClient:
 
         # SSL verification
         self.session.verify = verify_ssl
+        if not verify_ssl:
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     def _rate_limit_wait(self):
         delay = max(self.rate_limit, self._adaptive_delay)
