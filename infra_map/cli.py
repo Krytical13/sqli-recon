@@ -200,7 +200,7 @@ def main():
         api_sources = []
         if api_keys.get("shodan"):
             api_sources.append("shodan")
-        if api_keys.get("censys_id") and api_keys.get("censys_secret"):
+        if api_keys.get("censys"):
             api_sources.append("censys")
         if api_sources:
             print(f"  {C.BOLD}API:{C.RESET}       {C.GREEN}{', '.join(api_sources)}{C.RESET}")

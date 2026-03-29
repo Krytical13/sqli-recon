@@ -47,8 +47,8 @@ class Mapper:
 
         if keys.get("shodan"):
             self.shodan = ShodanAPI(session, graph, keys["shodan"])
-        if keys.get("censys_id") and keys.get("censys_secret"):
-            self.censys = CensysAPI(session, graph, keys["censys_id"], keys["censys_secret"])
+        if keys.get("censys"):
+            self.censys = CensysAPI(session, graph, keys["censys"])
 
     def _wait(self):
         elapsed = time.time() - self._last_request

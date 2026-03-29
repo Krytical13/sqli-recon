@@ -20,9 +20,8 @@ TEMPLATE = """\
 shodan =
 
 # Get yours at: https://search.censys.io/account/api
-# Free tier: 250 queries/month.
-censys_id =
-censys_secret =
+# Personal Access Token (single value).
+censys =
 """
 
 
@@ -30,8 +29,7 @@ def load_keys():
     """Load API keys from config file, falling back to environment variables."""
     keys = {
         "shodan": "",
-        "censys_id": "",
-        "censys_secret": "",
+        "censys": "",
     }
 
     # Config file
@@ -47,8 +45,7 @@ def load_keys():
     # Environment variables override config file
     env_map = {
         "shodan": "SHODAN_API_KEY",
-        "censys_id": "CENSYS_API_ID",
-        "censys_secret": "CENSYS_API_SECRET",
+        "censys": "CENSYS_API_TOKEN",
     }
     for key, env_var in env_map.items():
         val = os.environ.get(env_var, "").strip()
