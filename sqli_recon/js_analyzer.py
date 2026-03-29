@@ -30,6 +30,24 @@ ENDPOINT_PATTERNS = [
         r"""(?:['"`])(https?://[a-zA-Z0-9_\-.:]+(?:/[a-zA-Z0-9_\-/.{}:?&=]*)?)(?:['"`])""",
         re.I,
     ),
+
+    # Template literals with embedded paths: `/api/users/${id}`
+    re.compile(
+        r"""`(/(?:api|rest|v[0-9]|admin|auth|search)[^`]*)`""",
+        re.I,
+    ),
+
+    # String concatenation: "/api/users/" + id or '/api/' + endpoint
+    re.compile(
+        r"""['"](/(?:api|rest|v[0-9]|admin|auth)[/a-zA-Z0-9_\-]*)['"]\s*\+""",
+        re.I,
+    ),
+
+    # Webpack/minified: e="/api/v1/users",t="/api/v1/products" (short variable assignments)
+    re.compile(
+        r"""[=,]\s*['"](/(?:api|rest|v[0-9])[/a-zA-Z0-9_\-{}.:]+)['"]""",
+        re.I,
+    ),
 ]
 
 # Patterns for fetch/XHR/axios calls - captures the URL argument
@@ -175,6 +193,10 @@ class JsAnalyzer:
             if len(js_text) > 5_000_000:  # Skip files > 5MB (likely vendor bundles)
                 log.debug(f"Skipping large JS file: {js_url} ({len(js_text)} bytes)")
                 continue
+
+            # Light deobfuscation for minified JS — add newlines at statement
+            # boundaries so regex patterns can match across logical lines
+            js_text = _deobfuscate(js_text)
 
             # Find base URLs first
             for pattern in BASE_URL_PATTERNS:
@@ -438,3 +460,29 @@ def _infer_type(value):
     if re.match(r"^\d+$", value):
         return "numeric"
     return "string"
+
+
+def _deobfuscate(js_text):
+    """Light deobfuscation/beautification for minified JavaScript.
+
+    Doesn't fully parse — just adds whitespace at statement boundaries
+    so regex patterns can match across what were single-line constructs.
+    Also resolves common webpack patterns.
+    """
+    # Add newlines after semicolons and braces (basic beautification)
+    # This helps patterns match in minified code like: a="/api/v1";b="/users"
+    text = re.sub(r";(?=[^\s])", ";\n", js_text)
+
+    # Resolve template literal interpolations: `/api/${version}/users` → /api/{version}/users
+    text = re.sub(r"\$\{(\w+)\}", r"{\1}", text)
+
+    # Decode common hex/unicode escapes in strings: \x2f → /
+    def _hex_replace(m):
+        try:
+            return chr(int(m.group(1), 16))
+        except ValueError:
+            return m.group(0)
+    text = re.sub(r"\\x([0-9a-fA-F]{2})", _hex_replace, text)
+    text = re.sub(r"\\u([0-9a-fA-F]{4})", _hex_replace, text)
+
+    return text
