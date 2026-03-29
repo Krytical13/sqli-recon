@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sqli-recon"
-version = "0.1.0"
+version = "1.0.0"
 description = "Active SQL injection surface discovery tool"
 requires-python = ">=3.8"
 dependencies = [
