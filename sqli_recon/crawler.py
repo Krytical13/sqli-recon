@@ -48,6 +48,7 @@ class Crawler:
         self.endpoints = []
         self.js_urls = set()
         self._seen_endpoints = set()  # Dedup key: (base_url, method, frozenset(param_names))
+        self._seen_surfaces = set()   # (path, frozenset(param_names)) — skip same-shape URLs
 
     def crawl(self, progress_callback=None):
         """
@@ -109,10 +110,22 @@ class Crawler:
                     continue
                 if not self.client.is_same_scope(link_url, self.target_url, self.scope):
                     continue
+
+                # Surface dedup: if we've already seen this path with the same
+                # parameter names, skip it. /showthread.php?tid=1 and tid=500
+                # are the same injection surface — no need to crawl both.
+                link_parsed = urlparse(link_url)
+                link_qs = parse_qs(link_parsed.query, keep_blank_values=True)
+                surface_key = (link_parsed.path, frozenset(link_qs.keys()))
+                if link_qs and surface_key in self._seen_surfaces:
+                    continue
+                if link_qs:
+                    self._seen_surfaces.add(surface_key)
+
                 self.visited.add(normalized)
 
                 # Check if it's a JS file
-                path = urlparse(link_url).path.lower()
+                path = link_parsed.path.lower()
                 if any(path.endswith(ext) for ext in JS_EXTENSIONS):
                     self.js_urls.add(link_url)
                     continue
