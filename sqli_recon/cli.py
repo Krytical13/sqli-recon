@@ -708,6 +708,14 @@ def main():
     output_gen.print_summary(max_rows=args.top)
     output_gen.print_top_reasons(top_n=min(10, len(findings)))
 
+    # Second-order SQLi hints
+    from sqli_recon.intelligence import SecondOrderAnalyzer
+    second_order = SecondOrderAnalyzer.analyze(all_endpoints)
+    if second_order and not args.quiet and not args.json_only:
+        print(f"\n{C.BOLD}Second-order SQLi hints ({len(second_order)}):{C.RESET}")
+        for hint in second_order[:5]:
+            print(f"  {C.YELLOW}{hint['hint']}{C.RESET}")
+
     # Platform-specific recon tips
     platform_tips = tech_fp.platform_recon_tips()
     if platform_tips and not args.quiet:

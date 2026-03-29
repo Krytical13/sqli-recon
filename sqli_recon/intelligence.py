@@ -789,6 +789,110 @@ class GraphQLIntrospector:
         return endpoints
 
 
+# ============================================================
+# 5. Second-order SQLi hints
+# ============================================================
+
+# Store points: forms/endpoints where user input is saved to the database
+STORE_INDICATORS = [
+    # Form actions that save data
+    re.compile(r"register|signup|sign.up|create.account", re.I),
+    re.compile(r"profile|settings|preferences|account", re.I),
+    re.compile(r"comment|reply|review|feedback|message|post", re.I),
+    re.compile(r"submit|save|update|edit|modify", re.I),
+    re.compile(r"upload|import|add|new|insert", re.I),
+    re.compile(r"contact|support|ticket", re.I),
+]
+
+# Render points: pages where stored data gets displayed (potential trigger locations)
+RENDER_INDICATORS = [
+    re.compile(r"admin|dashboard|manage|moderate|panel", re.I),
+    re.compile(r"report|log|audit|history|activity", re.I),
+    re.compile(r"export|download|print|pdf|csv", re.I),
+    re.compile(r"user.?list|member.?list|view.?all", re.I),
+    re.compile(r"search.?results|listing|browse", re.I),
+    re.compile(r"email|notification|digest|newsletter", re.I),
+]
+
+# Fields commonly stored in DB and later rendered elsewhere
+STORABLE_PARAM_NAMES = re.compile(
+    r"^(name|username|email|title|subject|message|comment|body|content|"
+    r"description|bio|about|address|company|website|url|phone|"
+    r"first.?name|last.?name|display.?name|nick|signature|"
+    r"feedback|review|note|reason|text|input)$",
+    re.I,
+)
+
+
+class SecondOrderAnalyzer:
+    """
+    Identifies potential second-order SQLi surfaces.
+
+    Second-order SQLi: input is stored safely on write, but rendered
+    unsafely when read. The injection payload goes into a registration
+    form but triggers when an admin views the user list.
+
+    This analyzer identifies:
+    - Store points: endpoints where user data is saved
+    - Render points: endpoints where stored data is displayed
+    - Storable parameters: field names likely to be stored and re-rendered
+    """
+
+    @staticmethod
+    def analyze(endpoints):
+        """
+        Analyze endpoints for second-order SQLi potential.
+        Returns list of (store_endpoint, storable_params, likely_render_points) tuples.
+        """
+        from sqli_recon.models import ParamLocation
+
+        store_points = []
+        render_points = []
+
+        for ep in endpoints:
+            path = urlparse(ep.url).path.lower()
+            url_lower = ep.url.lower()
+
+            # Classify as store or render point
+            is_store = (
+                ep.method in ("POST", "PUT", "PATCH") and
+                any(p.search(path) or p.search(url_lower) for p in STORE_INDICATORS)
+            )
+            is_render = any(p.search(path) or p.search(url_lower) for p in RENDER_INDICATORS)
+
+            if is_store:
+                # Find storable params
+                storable = [
+                    p for p in ep.parameters
+                    if p.location in (ParamLocation.BODY, ParamLocation.JSON, ParamLocation.QUERY)
+                    and STORABLE_PARAM_NAMES.match(p.name)
+                ]
+                if storable:
+                    store_points.append((ep, storable))
+
+            if is_render:
+                render_points.append(ep)
+
+        # Pair store points with likely render points
+        results = []
+        for store_ep, storable_params in store_points:
+            # Find render points on the same site
+            render_urls = [urlparse(r.url).path for r in render_points[:5]]
+            results.append({
+                "store_endpoint": store_ep.url,
+                "store_method": store_ep.method,
+                "storable_params": [p.name for p in storable_params],
+                "likely_render_points": render_urls,
+                "hint": (
+                    f"Data entered via {store_ep.method} {urlparse(store_ep.url).path} "
+                    f"(params: {', '.join(p.name for p in storable_params)}) "
+                    f"may be rendered at: {', '.join(render_urls) if render_urls else 'admin/report pages'}"
+                ),
+            })
+
+        return results
+
+
 def _graphql_type_name(type_obj):
     """Extract the base type name from a GraphQL type (unwrapping NonNull/List)."""
     if not type_obj:
