@@ -4,9 +4,15 @@ import json
 import os
 import re
 import logging
+import shlex
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 from sqli_recon.models import Finding, ParamLocation
+
+
+def _shell_quote(s):
+    """Quote a string for safe shell use."""
+    return shlex.quote(s)
 
 log = logging.getLogger(__name__)
 
@@ -233,14 +239,20 @@ class OutputGenerator:
         """
         extra = " ".join(self.sqlmap_extra_flags)
 
-        session_flags = []
+        # Build session flags — these go into shell variables at the top
+        # of the script so quoting is handled once, not per-command
+        session_vars = []
+        session_refs = []
         if self.session_cookie:
-            session_flags.append(f'--cookie="{self.session_cookie}"')
+            session_vars.append(f'COOKIE={_shell_quote(self.session_cookie)}')
+            session_refs.append('--cookie="$COOKIE"')
         if self.user_agent:
-            session_flags.append(f'--user-agent="{self.user_agent}"')
+            session_vars.append(f'UA={_shell_quote(self.user_agent)}')
+            session_refs.append('--user-agent="$UA"')
         if self.proxy:
-            session_flags.append(f'--proxy={self.proxy}')
-        session_str = " ".join(session_flags)
+            session_vars.append(f'PROXY={_shell_quote(self.proxy)}')
+            session_refs.append('--proxy="$PROXY"')
+        session_str = " ".join(session_refs)
         all_extra = f"{extra} {session_str}".strip()
 
         lines = [
@@ -254,6 +266,20 @@ class OutputGenerator:
             "# Usage: ./run_sqlmap.sh           (run all)",
             "#        ./run_sqlmap.sh --high     (HIGH only)",
             "#        ./run_sqlmap.sh --dry-run  (show commands without running)",
+            "",
+            *[f'{v}' for v in session_vars],
+            "" if session_vars else "# (no session)",
+            '# Check sqlmap is available',
+            'if ! command -v sqlmap &>/dev/null; then',
+            '  if [ -f "$(dirname "$0")/../../.venv/bin/sqlmap" ]; then',
+            '    export PATH="$(dirname "$0")/../../.venv/bin:$PATH"',
+            '  elif [ -f "$(dirname "$0")/../.venv/bin/sqlmap" ]; then',
+            '    export PATH="$(dirname "$0")/../.venv/bin:$PATH"',
+            '  else',
+            '    echo "sqlmap not found. Install with: pip install sqlmap"',
+            '    exit 1',
+            '  fi',
+            'fi',
             "",
             'DRY_RUN=false',
             'HIGH_ONLY=false',
