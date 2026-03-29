@@ -282,6 +282,22 @@ def main():
     all_endpoints = []
     start_time = time.time()
 
+    # Get platform-aware scan recommendations
+    scan_rec = tech_fp.scan_recommendations()
+    priority_paths = tech_fp.priority_endpoints()
+
+    if priority_paths and not args.quiet and not args.json_only:
+        top_platform = tech_fp.summary()[0][0] if tech_fp.summary() else "Unknown"
+        print(f"  {C.CYAN}{top_platform} detected:{C.RESET} {len(priority_paths)} platform-specific endpoints queued")
+        if scan_rec["skip_api_brute"] and do_brute_api:
+            print(f"  {C.DIM}Skipping generic API brute — platform endpoints cover it{C.RESET}")
+            do_brute_api = False
+        if scan_rec["skip_graphql"]:
+            print(f"  {C.DIM}Skipping GraphQL — not typical for this platform{C.RESET}")
+
+    # Apply extra depth for deep platforms (forums)
+    crawl_depth = args.depth + scan_rec.get("extra_depth", 0)
+
     # ---- Phase 1: Active Crawl ----
     if not args.quiet and not args.json_only:
         log_phase("CRAWL")
@@ -290,16 +306,19 @@ def main():
     crawler = Crawler(
         client=client,
         target_url=args.url,
-        max_depth=args.depth,
+        max_depth=crawl_depth,
         max_pages=args.max_pages,
         scope=args.scope,
     )
+
+    # Build seed URLs from platform-specific priority endpoints
+    seed_urls = [f"{parsed.scheme}://{parsed.netloc}{path}" for path in priority_paths]
 
     def crawl_progress(done, queued):
         if not args.quiet and not args.json_only:
             print(f"\r  {C.DIM}Pages: {done} crawled, {queued} queued{C.RESET}    ", end="", flush=True)
 
-    endpoints, js_urls = crawler.crawl(progress_callback=crawl_progress)
+    endpoints, js_urls = crawler.crawl(progress_callback=crawl_progress, seed_urls=seed_urls)
     all_endpoints.extend(endpoints)
 
     if not args.quiet and not args.json_only:
@@ -441,15 +460,16 @@ def main():
             print(f"  Found {len(method_results)} additional method variants")
 
     # ---- Phase 6: GraphQL Introspection ----
-    gql = GraphQLIntrospector(client, args.url)
-    gql_endpoints = gql.discover_and_introspect(known_endpoints=all_endpoints)
-    if gql_endpoints:
-        all_endpoints.extend(gql_endpoints)
-        if not args.quiet and not args.json_only:
-            log_phase("GRAPHQL")
-            args_count = sum(len(e.parameters) for e in gql_endpoints)
-            log_status(f"Introspection succeeded — {len(gql_endpoints)} operations, "
-                       f"{args_count} arguments discovered")
+    if not scan_rec.get("skip_graphql"):
+        gql = GraphQLIntrospector(client, args.url)
+        gql_endpoints = gql.discover_and_introspect(known_endpoints=all_endpoints)
+        if gql_endpoints:
+            all_endpoints.extend(gql_endpoints)
+            if not args.quiet and not args.json_only:
+                log_phase("GRAPHQL")
+                args_count = sum(len(e.parameters) for e in gql_endpoints)
+                log_status(f"Introspection succeeded — {len(gql_endpoints)} operations, "
+                           f"{args_count} arguments discovered")
 
     # ---- Phase 7: Response Analysis ----
     # Check endpoints that returned data during crawl for DB-row patterns

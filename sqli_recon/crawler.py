@@ -50,11 +50,15 @@ class Crawler:
         self._seen_endpoints = set()  # Dedup key: (base_url, method, frozenset(param_names))
         self._seen_surfaces = set()   # (path, frozenset(param_names)) — skip same-shape URLs
 
-    def crawl(self, progress_callback=None):
+    def crawl(self, progress_callback=None, seed_urls=None):
         """
         Crawl the target site. Returns (endpoints, js_urls).
 
-        progress_callback(pages_crawled, total_queued) is called periodically.
+        Args:
+            progress_callback: Called with (pages_crawled, queued_count).
+            seed_urls: Extra URLs to inject into the crawl queue (e.g., from
+                       platform-specific intelligence). These get crawled at
+                       depth 1 alongside robots/sitemap discoveries.
         """
         queue = deque()
         queue.append((self.target_url, 0))
@@ -65,7 +69,15 @@ class Crawler:
             normalized = self._normalize_url(url)
             if normalized not in self.visited:
                 self.visited.add(normalized)
-                queue.append((url, 1))  # depth 1 (one level from root)
+                queue.append((url, 1))
+
+        # Platform-specific priority endpoints
+        if seed_urls:
+            for url in seed_urls:
+                normalized = self._normalize_url(url)
+                if normalized not in self.visited:
+                    self.visited.add(normalized)
+                    queue.append((url, 1))
 
         pages_crawled = 0
 

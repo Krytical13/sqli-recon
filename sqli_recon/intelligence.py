@@ -299,6 +299,149 @@ class TechFingerprint:
         """Return detected technologies sorted by confidence."""
         return sorted(self.detected.items(), key=lambda x: -x[1])
 
+    def priority_endpoints(self):
+        """Return platform-specific high-value endpoints to inject into the crawl.
+
+        These are endpoints known to be historically vulnerable or interesting
+        for the detected platform. Injected early so they get crawled, analyzed,
+        and tested even if the spider doesn't find links to them.
+        """
+        endpoints = []
+
+        if self.detected.get("MyBB", 0) > 0.5:
+            endpoints.extend([
+                # Historically most exploited MyBB endpoints
+                "/search.php",
+                "/search.php?action=results",
+                "/member.php?action=profile&uid=1",
+                "/member.php?action=login",
+                "/member.php?action=register",
+                "/forumdisplay.php?fid=1",
+                "/forumdisplay.php?fid=1&sortby=subject&order=asc",
+                "/showthread.php?tid=1",
+                "/showthread.php?tid=1&action=lastpost",
+                "/online.php?sortby=username",
+                "/newreply.php?tid=1",
+                "/printthread.php?tid=1",
+                "/misc.php?action=help",
+                "/modcp.php",
+                "/usercp.php",
+                "/calendar.php",
+                "/reputation.php?uid=1",
+                "/private.php",
+                "/xmlhttp.php",
+            ])
+
+        if self.detected.get("phpBB", 0) > 0.5:
+            endpoints.extend([
+                "/viewtopic.php?t=1",
+                "/viewtopic.php?f=1&t=1",
+                "/viewforum.php?f=1",
+                "/memberlist.php?mode=viewprofile&u=1",
+                "/memberlist.php?mode=searchuser",
+                "/search.php",
+                "/ucp.php?mode=login",
+                "/posting.php",
+                "/mcp.php",
+            ])
+
+        if self.detected.get("WordPress", 0) > 0.5:
+            endpoints.extend([
+                # REST API — often exposes data without auth
+                "/wp-json/wp/v2/users",
+                "/wp-json/wp/v2/posts",
+                "/wp-json/wp/v2/pages",
+                "/wp-json/wp/v2/categories",
+                "/wp-json/wp/v2/tags",
+                "/wp-json/wp/v2/comments",
+                "/wp-json/wp/v2/media",
+                "/wp-json/wp/v2/search?search=test",
+                "/wp-json/",
+                # Classic attack surfaces
+                "/xmlrpc.php",
+                "/wp-login.php",
+                "/wp-admin/admin-ajax.php",
+                "/wp-admin/admin-post.php",
+                # Plugin/theme enumeration
+                "/wp-content/plugins/",
+                "/wp-content/themes/",
+                "/?s=test",  # Search
+                "/?p=1",     # Post by ID
+                "/?page_id=1",
+                "/?author=1",
+                "/?cat=1",
+            ])
+
+        if self.detected.get("Drupal", 0) > 0.5:
+            endpoints.extend([
+                "/user/login",
+                "/user/register",
+                "/node/1",
+                "/admin",
+                "/jsonapi",
+                "/jsonapi/node/article",
+                "/?q=user/login",
+                "/?q=node/1",
+                "/rest/type/node/article",  # REST API
+            ])
+
+        if self.detected.get("ASP.NET", 0) > 0.5:
+            endpoints.extend([
+                "/default.aspx",
+                "/login.aspx",
+                "/search.aspx",
+                "/admin/",
+                "/api/",
+                "/webforms/",
+            ])
+
+        if self.detected.get("Java", 0) > 0.5:
+            endpoints.extend([
+                "/login.jsp",
+                "/search.jsp",
+                "/admin/",
+                "/api/",
+                "/console/",
+                "/manager/html",  # Tomcat manager
+                "/status",        # Spring Boot actuator
+                "/actuator",
+                "/actuator/env",
+                "/swagger-ui.html",
+            ])
+
+        return endpoints
+
+    def scan_recommendations(self):
+        """Return recommendations on which scan phases to run or skip.
+
+        Returns dict with:
+            skip_api_brute: bool — skip if platform-specific endpoints cover it
+            skip_graphql: bool — skip if not a JS/API-heavy platform
+            extra_depth: int — suggest extra crawl depth for deep platforms
+        """
+        rec = {
+            "skip_api_brute": False,
+            "skip_graphql": False,
+            "extra_depth": 0,
+        }
+
+        # If we detected a specific CMS, its priority_endpoints cover the
+        # important paths already — generic API brute adds noise
+        if any(self.detected.get(cms, 0) > 0.5
+               for cms in ["MyBB", "phpBB", "WordPress", "Drupal"]):
+            rec["skip_api_brute"] = True
+
+        # GraphQL is only relevant for modern JS-heavy apps
+        if any(self.detected.get(t, 0) > 0.5
+               for t in ["MyBB", "phpBB", "WordPress", "Drupal", "Perl/CGI"]):
+            rec["skip_graphql"] = True
+
+        # Forums have deep thread structures — extra depth helps
+        if any(self.detected.get(t, 0) > 0.5 for t in ["MyBB", "phpBB"]):
+            rec["extra_depth"] = 1
+
+        return rec
+
     def sqlmap_flags(self):
         """Return recommended sqlmap flags based on detected technology."""
         flags = []
