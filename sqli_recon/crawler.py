@@ -91,6 +91,10 @@ class Crawler:
             if resp is None:
                 continue
 
+            # Skip CAPTCHA challenge pages — not real content
+            if getattr(resp, '_is_captcha', False):
+                continue
+
             pages_crawled += 1
             if progress_callback and pages_crawled % 5 == 0:
                 progress_callback(pages_crawled, len(queue))

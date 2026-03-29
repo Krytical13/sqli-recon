@@ -550,16 +550,21 @@ def main():
     # ---- Network stats ----
     if not args.quiet and not args.json_only:
         s = client.stats
-        if s["waf_blocks"] > 0 or s["rate_limited"] > 0:
+        if s["waf_blocks"] > 0 or s["rate_limited"] > 0 or s["captchas"] > 0:
             log_phase("NETWORK")
             log_status(
                 f"{s['requests']} requests, "
                 f"{s['success']} OK, "
                 f"{s['waf_blocks']} WAF blocks, "
                 f"{s['rate_limited']} rate-limited, "
+                f"{s['captchas']} CAPTCHAs, "
                 f"{s['timeouts']} timeouts, "
                 f"{s['errors']} errors"
             )
+            if s["captchas"] > 0:
+                print(f"  {C.YELLOW}CAPTCHA challenges detected — {s['captchas']} responses were challenge pages.{C.RESET}")
+                print(f"  {C.YELLOW}Those pages were excluded from analysis. Results may be incomplete.{C.RESET}")
+                print(f"  {C.YELLOW}Try: --headless (real browser can pass JS challenges), or --rate-limit 3{C.RESET}")
             if s["waf_blocks"] > 0:
                 print(f"  {C.YELLOW}WAF detected — parameter fuzzing may have triggered blocks.{C.RESET}")
                 print(f"  {C.YELLOW}Use --rate-limit to slow down, or review WAF-blocked requests.{C.RESET}")

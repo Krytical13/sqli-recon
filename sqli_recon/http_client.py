@@ -30,15 +30,17 @@ class HttpClient:
         self._last_request_time = 0.0
         self._adaptive_delay = 0.0  # Auto-increases when rate limited
 
-        # WAF/rate-limit tracking
+        # WAF/rate-limit/CAPTCHA tracking
         self.stats = {
             "requests": 0,
             "success": 0,
             "waf_blocks": 0,
             "rate_limited": 0,
+            "captchas": 0,
             "errors": 0,
             "timeouts": 0,
         }
+        self._captcha_backoff = False  # True when CAPTCHA detected, triggers slowdown
 
         self.session = requests.Session()
 
@@ -142,11 +144,34 @@ class HttpClient:
                     self.stats["success"] += 1  # Auth 403, not WAF
                 return resp
 
+            # CAPTCHA detection — check response body for challenge pages
+            if _is_captcha_response(resp):
+                self.stats["captchas"] += 1
+                resp._is_captcha = True
+                log.debug(f"CAPTCHA detected on {method} {url}")
+
+                if not self._captcha_backoff:
+                    self._captcha_backoff = True
+                    # First CAPTCHA — increase delay significantly
+                    self._adaptive_delay = max(self._adaptive_delay, 3.0)
+                    log.warning(f"CAPTCHA triggered — increasing delay to {self._adaptive_delay}s")
+                else:
+                    # Repeated CAPTCHAs — back off more
+                    self._adaptive_delay = min(self._adaptive_delay * 1.5, 15.0)
+
+                return resp
+            else:
+                resp._is_captcha = False
+
             self.stats["success"] += 1
 
             # Decay adaptive delay on success
             if self._adaptive_delay > 0:
                 self._adaptive_delay = max(0, self._adaptive_delay - 0.1)
+
+            # If we were in CAPTCHA backoff and got a clean response, recover
+            if self._captcha_backoff:
+                self._captcha_backoff = False
 
             return resp
 
@@ -185,6 +210,69 @@ class HttpClient:
             url_domain = _extract_base_domain(url_parsed.netloc)
             return target_domain == url_domain
         return False
+
+
+def _is_captcha_response(resp):
+    """Detect if a response is a CAPTCHA challenge page instead of real content.
+
+    Catches: Cloudflare JS challenges, reCAPTCHA, hCaptcha, Turnstile,
+    and generic/custom CAPTCHA implementations.
+    """
+    if resp is None:
+        return False
+
+    # Cloudflare challenge pages return 403 or 503 with specific headers
+    if resp.status_code in (403, 503):
+        server = resp.headers.get("Server", "").lower()
+        if "cloudflare" in server:
+            body = resp.text[:3000].lower()
+            if any(s in body for s in [
+                "checking your browser", "just a moment",
+                "cf-browser-verification", "challenge-platform",
+                "ray id", "cf_chl_opt",
+            ]):
+                return True
+
+    # Only scan body for 200 responses if they look suspicious
+    # (CAPTCHA pages often return 200 with a challenge form)
+    body = resp.text[:5000].lower() if resp.text else ""
+    if not body:
+        return False
+
+    # Known CAPTCHA service markers
+    captcha_markers = [
+        # Google reCAPTCHA
+        "recaptcha", "g-recaptcha", "grecaptcha",
+        "www.google.com/recaptcha",
+        "www.gstatic.com/recaptcha",
+        # hCaptcha
+        "hcaptcha", "h-captcha",
+        "hcaptcha.com",
+        # Cloudflare Turnstile
+        "cf-turnstile", "challenges.cloudflare.com/turnstile",
+        # Generic CAPTCHA indicators
+        "captcha", "solve the challenge",
+        "verify you are human", "verify you're human",
+        "are you a robot", "are you human",
+        "prove you are not a robot",
+        "bot detection", "bot protection",
+        "human verification",
+    ]
+
+    # Count how many markers match — a single "captcha" in a page about
+    # CAPTCHAs (like a blog post) shouldn't trigger, but a page with
+    # multiple markers (form + script + message) is a real challenge.
+    hits = sum(1 for marker in captcha_markers if marker in body)
+
+    # 2+ markers = almost certainly a CAPTCHA page
+    if hits >= 2:
+        return True
+
+    # Single "captcha" hit + it's a short page (challenge pages are small)
+    if hits == 1 and len(body) < 3000:
+        return True
+
+    return False
 
 
 def _extract_base_domain(netloc):
