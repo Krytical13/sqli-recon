@@ -299,6 +299,62 @@ class TechFingerprint:
         """Return detected technologies sorted by confidence."""
         return sorted(self.detected.items(), key=lambda x: -x[1])
 
+    def sqlmap_flags(self):
+        """Return recommended sqlmap flags based on detected technology."""
+        flags = []
+        notes = []
+
+        # DBMS detection — tells sqlmap to skip testing other DB types
+        if self.detected.get("MyBB", 0) > 0.5:
+            flags.append("--dbms=MySQL")
+            flags.append("--level=3")  # ORDER BY injection needs higher level
+            flags.append("--risk=2")
+            notes.append("MyBB detected: MySQL backend, level=3 for ORDER BY injection")
+        elif self.detected.get("WordPress", 0) > 0.5:
+            flags.append("--dbms=MySQL")
+            notes.append("WordPress detected: MySQL backend")
+        elif self.detected.get("phpBB", 0) > 0.5:
+            flags.append("--dbms=MySQL")
+            flags.append("--level=3")
+            notes.append("phpBB detected: MySQL backend")
+        elif self.detected.get("Drupal", 0) > 0.5:
+            flags.append("--dbms=MySQL")
+            notes.append("Drupal detected: MySQL backend (may also be PostgreSQL)")
+        elif self.detected.get("ASP.NET", 0) > 0.5 or self.detected.get("IIS", 0) > 0.5:
+            flags.append("--dbms=MSSQL")
+            notes.append("ASP.NET/IIS detected: likely MSSQL backend")
+
+        # Tamper scripts for common WAF bypasses
+        if self.detected.get("MyBB", 0) > 0.5 or self.detected.get("phpBB", 0) > 0.5:
+            flags.append("--tamper=space2comment")
+            notes.append("Forum software: space2comment tamper for WAF bypass")
+        if self.detected.get("WordPress", 0) > 0.5:
+            flags.append("--tamper=space2comment,between")
+            notes.append("WordPress: common WAF tamper scripts")
+            notes.append("WordPress tip: plugins are the main attack surface — check /wp-content/plugins/ for installed plugins")
+            notes.append("WordPress tip: try /wp-json/wp/v2/users to enumerate users without auth")
+
+        return flags, notes
+
+    def platform_recon_tips(self):
+        """Return platform-specific recon tips for the terminal output."""
+        tips = []
+        if self.detected.get("WordPress", 0) > 0.5:
+            tips.append("WordPress: SQLi most likely in plugins, not core. Identify plugins via /wp-content/plugins/ paths.")
+            tips.append("WordPress: /wp-json/wp/v2/ endpoints often expose data without auth.")
+            tips.append("WordPress: check for xmlrpc.php (brute force vector) and wp-login.php.")
+        if self.detected.get("MyBB", 0) > 0.5:
+            tips.append("MyBB: search.php (keywords param) is historically the most exploited endpoint.")
+            tips.append("MyBB: ORDER BY injection via sortby/order params — needs sqlmap --level=3.")
+            tips.append("MyBB: check for outdated plugins at /inc/plugins/.")
+        if self.detected.get("phpBB", 0) > 0.5:
+            tips.append("phpBB: viewtopic.php and memberlist.php are common injection targets.")
+        if self.detected.get("Drupal", 0) > 0.5:
+            tips.append("Drupal: check for Drupalgeddon (CVE-2018-7600) if version < 7.58 or 8.5.1.")
+        if self.detected.get("ASP.NET", 0) > 0.5:
+            tips.append("ASP.NET: check for ViewState deserialization and padding oracle vulnerabilities.")
+        return tips
+
 
 # ============================================================
 # 3. Response content analysis

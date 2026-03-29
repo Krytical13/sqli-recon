@@ -46,9 +46,11 @@ def colorize_risk(risk):
 class OutputGenerator:
     """Generates all output formats from a list of Findings."""
 
-    def __init__(self, findings, output_dir=None):
+    def __init__(self, findings, output_dir=None, sqlmap_extra_flags=None, sqlmap_notes=None):
         self.findings = findings
         self.output_dir = output_dir
+        self.sqlmap_extra_flags = sqlmap_extra_flags or []
+        self.sqlmap_notes = sqlmap_notes or []
 
     def generate_all(self):
         """Generate all output files and print summary."""
@@ -202,6 +204,8 @@ class OutputGenerator:
 
     def write_sqlmap_commands(self, path, requests_dir):
         """Write a shell script with suggested sqlmap commands for each finding."""
+        extra = " ".join(self.sqlmap_extra_flags)
+
         lines = [
             "#!/bin/bash",
             "# Auto-generated sqlmap commands from sqli_recon",
@@ -209,10 +213,18 @@ class OutputGenerator:
             "",
         ]
 
+        # Tech-specific notes
+        if self.sqlmap_notes:
+            lines.append("# === Technology-specific optimizations ===")
+            for note in self.sqlmap_notes:
+                lines.append(f"# {note}")
+            lines.append("")
+
         # Batch mode command
         urls_file = os.path.join(os.path.dirname(path), "sqlmap_urls.txt")
+        batch_flags = f"--batch --smart {extra}".strip()
         lines.append(f"# === Batch scan all URL findings ===")
-        lines.append(f"# sqlmap -m {urls_file} --batch --smart --level=2 --risk=1")
+        lines.append(f"# sqlmap -m {urls_file} {batch_flags}")
         lines.append("")
 
         # Individual commands for high-risk findings
@@ -223,32 +235,32 @@ class OutputGenerator:
 
             ep = finding.endpoint
             param = finding.parameter
-            lines.append(f"# [{finding.risk_level}] {ep.method} {ep.base_url} -> {param.name}")
+            confirmed = "CONFIRMED" if finding.score >= 0.90 else finding.risk_level
+            lines.append(f"# [{confirmed}] {ep.method} {ep.base_url} -> {param.name}")
 
             if param.location in (ParamLocation.QUERY, ParamLocation.PATH):
                 url = self._build_marked_url(finding)
-                lines.append(f"# sqlmap -u \"{url}\" --batch --level=2 --risk=1")
+                lines.append(f"# sqlmap -u \"{url}\" --batch {extra}")
             elif param.location == ParamLocation.JSON:
-                # JSON bodies work best with -r + explicit -p flag
                 req_files = [f for f in os.listdir(requests_dir)
                              if f.startswith(f"{i+1:03d}_")] if os.path.isdir(requests_dir) else []
                 if req_files:
                     req_path = os.path.join(requests_dir, req_files[0])
-                    lines.append(f"# sqlmap -r \"{req_path}\" -p {param.name} --batch --level=2 --risk=1")
+                    lines.append(f"# sqlmap -r \"{req_path}\" -p {param.name} --batch {extra}")
                 else:
                     body = finding._build_request_body() if hasattr(finding, '_build_request_body') else f'{{\"{param.name}\": \"test\"}}'
                     lines.append(f"# sqlmap -u \"{ep.base_url}\" --method=POST "
                                  f"--data='{body}' "
                                  f"--headers=\"Content-Type: application/json\" "
-                                 f"-p {param.name} --batch --level=2 --risk=1")
+                                 f"-p {param.name} --batch {extra}")
             elif param.location == ParamLocation.BODY:
                 req_files = [f for f in os.listdir(requests_dir)
                              if f.startswith(f"{i+1:03d}_")] if os.path.isdir(requests_dir) else []
                 if req_files:
                     req_path = os.path.join(requests_dir, req_files[0])
-                    lines.append(f"# sqlmap -r \"{req_path}\" --batch --level=2 --risk=1")
+                    lines.append(f"# sqlmap -r \"{req_path}\" --batch {extra}")
                 else:
-                    lines.append(f"# sqlmap -u \"{ep.base_url}\" --data=\"{param.name}=test\" --batch")
+                    lines.append(f"# sqlmap -u \"{ep.base_url}\" --data=\"{param.name}=test\" --batch {extra}")
             lines.append("")
 
         with open(path, "w") as f:

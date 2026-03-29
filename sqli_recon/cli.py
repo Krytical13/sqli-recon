@@ -571,13 +571,24 @@ def main():
         print(json.dumps(report, indent=2))
         return
 
+    # Get tech-aware sqlmap flags
+    sqlmap_extra_flags, sqlmap_notes = tech_fp.sqlmap_flags()
+
     # Generate output files
-    output_gen = OutputGenerator(findings, output_dir)
+    output_gen = OutputGenerator(findings, output_dir, sqlmap_extra_flags=sqlmap_extra_flags,
+                                 sqlmap_notes=sqlmap_notes)
     result = output_gen.generate_all()
 
     # Print terminal summary
     output_gen.print_summary(max_rows=args.top)
     output_gen.print_top_reasons(top_n=min(10, len(findings)))
+
+    # Platform-specific recon tips
+    platform_tips = tech_fp.platform_recon_tips()
+    if platform_tips and not args.quiet:
+        print(f"\n{C.BOLD}Platform tips:{C.RESET}")
+        for tip in platform_tips:
+            print(f"  {C.YELLOW}{tip}{C.RESET}")
 
     # Print output file locations
     if result:
@@ -593,9 +604,18 @@ def main():
             has_get = any(f.parameter.location in (ParamLocation.QUERY, ParamLocation.PATH) for f in findings)
             has_post = any(f.parameter.location in (ParamLocation.BODY, ParamLocation.JSON) for f in findings)
 
+            extra = " ".join(sqlmap_extra_flags) if sqlmap_extra_flags else ""
+            if sqlmap_notes and not args.quiet:
+                print(f"\n{C.BOLD}sqlmap optimization:{C.RESET}")
+                for note in sqlmap_notes:
+                    print(f"  {C.DIM}{note}{C.RESET}")
+
             print(f"\n{C.BOLD}Quick start:{C.RESET}")
             if has_get and result['urls_count'] > 0:
-                print(f"  {C.GREEN}sqlmap -m {result['urls_file']} --batch --smart{C.RESET}")
+                cmd = f"sqlmap -m {result['urls_file']} --batch --smart"
+                if extra:
+                    cmd += f" {extra}"
+                print(f"  {C.GREEN}{cmd}{C.RESET}")
             if has_post:
                 # Find the top POST finding and suggest its request file
                 top_post = next((f for f in findings if f.parameter.location in (ParamLocation.BODY, ParamLocation.JSON)), None)
