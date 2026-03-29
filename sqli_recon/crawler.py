@@ -80,6 +80,7 @@ class Crawler:
                     queue.append((url, 1))
 
         pages_crawled = 0
+        captcha_streak = 0  # Consecutive CAPTCHAs
 
         while queue and pages_crawled < self.max_pages:
             url, depth = queue.popleft()
@@ -93,7 +94,13 @@ class Crawler:
 
             # Skip CAPTCHA challenge pages — not real content
             if getattr(resp, '_is_captcha', False):
+                captcha_streak += 1
+                if captcha_streak >= 5:
+                    log.warning("5 consecutive CAPTCHAs — aborting crawl early")
+                    break
                 continue
+            else:
+                captcha_streak = 0
 
             pages_crawled += 1
             if progress_callback and pages_crawled % 5 == 0:

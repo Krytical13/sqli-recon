@@ -321,9 +321,20 @@ def main():
     endpoints, js_urls = crawler.crawl(progress_callback=crawl_progress, seed_urls=seed_urls)
     all_endpoints.extend(endpoints)
 
+    captcha_abort = client.stats["captchas"] >= 5
+
     if not args.quiet and not args.json_only:
         forms = sum(1 for e in endpoints if e.source.value == "form")
         print(f"\r  Found {len(endpoints)} endpoints, {forms} forms, {len(js_urls)} JS files           ")
+        if captcha_abort:
+            print(f"\n  {C.RED}{C.BOLD}CAPTCHA wall hit — crawl aborted early.{C.RESET}")
+            print(f"  {C.YELLOW}Saving partial results. To get full coverage:{C.RESET}")
+            print(f"  {C.YELLOW}  1. Open the site in Tor Browser, solve the CAPTCHA{C.RESET}")
+            print(f"  {C.YELLOW}  2. Copy all cookies from DevTools (Network tab → any request → Cookie header){C.RESET}")
+            print(f"  {C.YELLOW}  3. Re-run: ./scan -u {args.url} --cookie \"paste_cookies_here\"{C.RESET}")
+            if not args.tor:
+                print(f"  {C.YELLOW}  Or try: --headless (real browser can pass JS challenges){C.RESET}")
+            print()
 
     # ---- Phase 1b: Headless Browser Crawl (optional) ----
     if do_headless:
@@ -508,13 +519,18 @@ def main():
         log_phase("ERROR DETECT")
         log_status("Probing high-value params for DB error responses...")
 
-    detector = ErrorDetector(client)
-
-    def error_progress(done, total):
+    confirmed = []
+    if captcha_abort:
         if not args.quiet and not args.json_only:
-            print(f"\r  {C.DIM}Tested {done}/{total} params{C.RESET}    ", end="", flush=True)
+            print(f"  {C.DIM}Skipped — CAPTCHA wall would block probes{C.RESET}")
+    else:
+        detector = ErrorDetector(client)
 
-    confirmed = detector.test_findings(findings, min_score=0.3, progress_callback=error_progress)
+        def error_progress(done, total):
+            if not args.quiet and not args.json_only:
+                print(f"\r  {C.DIM}Tested {done}/{total} params{C.RESET}    ", end="", flush=True)
+
+        confirmed = detector.test_findings(findings, min_score=0.3, progress_callback=error_progress)
 
     if confirmed:
         # Promote confirmed findings to HIGH with DB type info
