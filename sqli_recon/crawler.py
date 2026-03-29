@@ -38,18 +38,19 @@ class Crawler:
     """BFS web crawler that discovers endpoints, forms, parameters, and JS files."""
 
     def __init__(self, client, target_url, max_depth=3, max_pages=200, scope="domain",
-                 captcha_solver=None):
+                 captcha_solver=None, passive_analyzer=None):
         self.client = client
         self.target_url = target_url.rstrip("/")
         self.max_depth = max_depth
         self.max_pages = max_pages
         self.scope = scope
-        self.captcha_solver = captcha_solver  # Optional interactive CAPTCHA solver
+        self.captcha_solver = captcha_solver
+        self.passive_analyzer = passive_analyzer  # Scans every response for leaked info
 
         self.visited = set()
         self.endpoints = []
         self.js_urls = set()
-        self._seen_endpoints = set()  # Dedup key: (base_url, method, frozenset(param_names))
+        self._seen_endpoints = set()
         self._seen_surfaces = set()   # (path, frozenset(param_names)) — skip same-shape URLs
 
     def crawl(self, progress_callback=None, seed_urls=None):
@@ -124,6 +125,10 @@ class Crawler:
                 progress_callback(pages_crawled, len(queue))
 
             content_type = resp.headers.get("Content-Type", "")
+
+            # Passive analysis — scan response for leaked secrets/info
+            if self.passive_analyzer and resp.text:
+                self.passive_analyzer.analyze(url, resp.text)
 
             # Extract endpoints from the URL itself (query params)
             self._extract_url_params(url, resp.status_code, dict(resp.headers), Source.CRAWL)

@@ -377,6 +377,9 @@ def main():
             except ImportError:
                 pass
 
+        from sqli_recon.passive import PassiveAnalyzer
+        passive = PassiveAnalyzer()
+
         crawler = Crawler(
             client=client,
             target_url=args.url,
@@ -384,6 +387,7 @@ def main():
             max_pages=args.max_pages,
             scope=args.scope,
             captcha_solver=captcha_solver,
+            passive_analyzer=passive,
         )
 
         seed_urls = [f"{parsed.scheme}://{parsed.netloc}{path}" for path in priority_paths]
@@ -398,6 +402,15 @@ def main():
         if not args.quiet and not args.json_only:
             forms = sum(1 for e in endpoints if e.source.value == "form")
             print(f"\r  Found {len(endpoints)} endpoints, {forms} forms, {len(js_urls)} JS files           ")
+
+        # Report passive findings
+        if passive.has_findings() and not args.quiet and not args.json_only:
+            ps = passive.summary()
+            log_phase("PASSIVE")
+            log_status(f"Found {ps['high']} high, {ps['medium']} medium, {ps['low']} low info leaks")
+            for f in passive.findings.get("high", [])[:5]:
+                print(f"  {C.RED}[{f['type']}]{C.RESET} {f['value'][:80]}")
+                print(f"  {C.DIM}  at {f['url']}{C.RESET}")
 
         # Save checkpoint after crawl
         save_checkpoint(output_dir, "crawl_done", all_endpoints, js_urls)
@@ -729,6 +742,15 @@ def main():
     )
     result = output_gen.generate_all()
 
+    # Save passive analysis findings
+    if not resume_phase and passive.has_findings():
+        import json as json_mod
+        passive_path = os.path.join(output_dir, "passive_findings.json")
+        with open(passive_path, "w") as pf:
+            json_mod.dump(passive.all_findings(), pf, indent=2)
+        result["passive_file"] = passive_path
+        result["passive_count"] = sum(passive.summary().values())
+
     # Generate HTML report
     from sqli_recon.report import generate_html_report
     html_path = generate_html_report(
@@ -762,45 +784,28 @@ def main():
 
     # Print output file locations
     if result:
-        print(f"\n{C.BOLD}Output files:{C.RESET}")
-        print(f"  {C.CYAN}sqlmap URLs:{C.RESET}     {result['urls_file']} ({result['urls_count']} URLs)")
-        print(f"  {C.CYAN}Request files:{C.RESET}   {result['requests_dir']}/ ({result['requests_count']} files)")
-        print(f"  {C.CYAN}JSON report:{C.RESET}    {result['report_file']}")
+        print(f"\n{C.BOLD}Output:{C.RESET}")
         print(f"  {C.CYAN}HTML report:{C.RESET}    {html_path}")
-        print(f"  {C.CYAN}sqlmap commands:{C.RESET} {result['commands_file']}")
+        print(f"  {C.CYAN}sqlmap runner:{C.RESET}   {result['runner_file']}")
+        print(f"  {C.CYAN}JSON report:{C.RESET}    {result['report_file']}")
+        if result.get("passive_count"):
+            print(f"  {C.CYAN}Passive finds:{C.RESET}  {result['passive_file']} ({result['passive_count']} leaks)")
+        print(f"  {C.DIM}+ {result['requests_dir']}/ ({result['requests_count']} request files){C.RESET}")
+        print(f"  {C.DIM}+ {result['urls_file']} ({result['urls_count']} URLs){C.RESET}")
 
-        # Quick-start hints — show the right command for what was found
         if findings:
-            from sqli_recon.models import ParamLocation
-            has_get = any(f.parameter.location in (ParamLocation.QUERY, ParamLocation.PATH) for f in findings)
-            has_post = any(f.parameter.location in (ParamLocation.BODY, ParamLocation.JSON) for f in findings)
-
-            extra = " ".join(sqlmap_extra_flags) if sqlmap_extra_flags else ""
             if sqlmap_notes and not args.quiet:
                 print(f"\n{C.BOLD}sqlmap optimization:{C.RESET}")
                 for note in sqlmap_notes:
                     print(f"  {C.DIM}{note}{C.RESET}")
 
-            print(f"\n{C.BOLD}Quick start:{C.RESET}")
-            if has_get and result['urls_count'] > 0:
-                cmd = f"sqlmap -m {result['urls_file']} --batch --smart"
-                if extra:
-                    cmd += f" {extra}"
-                print(f"  {C.GREEN}{cmd}{C.RESET}")
-            if has_post:
-                # Find the top POST finding and suggest its request file
-                top_post = next((f for f in findings if f.parameter.location in (ParamLocation.BODY, ParamLocation.JSON)), None)
-                if top_post:
-                    idx = findings.index(top_post)
-                    import os
-                    req_files = sorted(f for f in os.listdir(result['requests_dir']) if f.startswith(f"{idx+1:03d}_"))
-                    if req_files:
-                        req_path = os.path.join(result['requests_dir'], req_files[0])
-                        p_flag = f" -p {top_post.parameter.name}" if top_post.parameter.location == ParamLocation.JSON else ""
-                        print(f"  {C.GREEN}sqlmap -r \"{req_path}\"{p_flag} --batch --level=2{C.RESET}")
-            if not has_get and not has_post:
-                print(f"  {C.DIM}No actionable findings for sqlmap.{C.RESET}")
-            print(f"  {C.DIM}See {result['commands_file']} for all suggested commands{C.RESET}")
+            high_count = sum(1 for f in findings if f.risk_level == "HIGH")
+            med_count = sum(1 for f in findings if f.risk_level == "MEDIUM")
+            print(f"\n{C.BOLD}Run sqlmap:{C.RESET}")
+            print(f"  {C.GREEN}{result['runner_file']}{C.RESET}              # test all {high_count + med_count} targets")
+            if high_count:
+                print(f"  {C.GREEN}{result['runner_file']} --high{C.RESET}        # HIGH risk only ({high_count} targets)")
+            print(f"  {C.GREEN}{result['runner_file']} --dry-run{C.RESET}     # preview commands without running")
 
 
 def _url_to_endpoint(url, response, source):

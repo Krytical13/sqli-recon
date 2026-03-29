@@ -65,12 +65,12 @@ class OutputGenerator:
 
             urls_path = os.path.join(self.output_dir, "sqlmap_urls.txt")
             report_path = os.path.join(self.output_dir, "report.json")
-            commands_path = os.path.join(self.output_dir, "sqlmap_commands.sh")
+            runner_path = os.path.join(self.output_dir, "run_sqlmap.sh")
 
             urls_written = self.write_sqlmap_urls(urls_path)
             requests_written = self.write_sqlmap_requests(requests_dir)
             self.write_json_report(report_path)
-            self.write_sqlmap_commands(commands_path, requests_dir)
+            self.write_sqlmap_runner(runner_path, requests_dir)
 
             return {
                 "urls_file": urls_path,
@@ -78,7 +78,7 @@ class OutputGenerator:
                 "requests_dir": requests_dir,
                 "requests_count": requests_written,
                 "report_file": report_path,
-                "commands_file": commands_path,
+                "runner_file": runner_path,
             }
         return {}
 
@@ -224,11 +224,15 @@ class OutputGenerator:
 
     # ---- sqlmap command suggestions ----
 
-    def write_sqlmap_commands(self, path, requests_dir):
-        """Write a shell script with suggested sqlmap commands for each finding."""
+    def write_sqlmap_runner(self, path, requests_dir):
+        """Write a single executable script that runs sqlmap against all findings.
+
+        HIGH findings first, then MEDIUM. Each command is live (not commented).
+        Session cookies, user-agent, and proxy baked into every command.
+        Just run: ./run_sqlmap.sh
+        """
         extra = " ".join(self.sqlmap_extra_flags)
 
-        # Build session flags that get appended to every command
         session_flags = []
         if self.session_cookie:
             session_flags.append(f'--cookie="{self.session_cookie}"')
@@ -237,76 +241,108 @@ class OutputGenerator:
         if self.proxy:
             session_flags.append(f'--proxy={self.proxy}')
         session_str = " ".join(session_flags)
-
-        # Combine all extra flags
         all_extra = f"{extra} {session_str}".strip()
 
         lines = [
             "#!/bin/bash",
-            "# Auto-generated sqlmap commands from sqli_recon",
-            "# Review and adjust before running!",
+            "set -e",
+            "",
+            "# sqli_recon → sqlmap runner",
+            "# Runs sqlmap against all discovered findings, HIGH risk first.",
+            "# Session cookies and platform-specific flags are baked in.",
+            "#",
+            "# Usage: ./run_sqlmap.sh           (run all)",
+            "#        ./run_sqlmap.sh --high     (HIGH only)",
+            "#        ./run_sqlmap.sh --dry-run  (show commands without running)",
+            "",
+            'DRY_RUN=false',
+            'HIGH_ONLY=false',
+            'for arg in "$@"; do',
+            '  case "$arg" in',
+            '    --dry-run) DRY_RUN=true ;;',
+            '    --high) HIGH_ONLY=true ;;',
+            '  esac',
+            'done',
+            "",
+            'run_cmd() {',
+            '  local label="$1"',
+            '  shift',
+            '  echo ""',
+            '  echo "=========================================="',
+            '  echo "$label"',
+            '  echo "=========================================="',
+            '  if [ "$DRY_RUN" = true ]; then',
+            '    echo "  $*"',
+            '  else',
+            '    "$@" || echo "[!] sqlmap exited with code $?"',
+            '  fi',
+            '}',
             "",
         ]
 
-        # Session info
-        if session_flags:
-            lines.append("# === Session (from auto-login or --cookie) ===")
-            if self.session_cookie:
-                lines.append(f"# Cookie: {self.session_cookie[:80]}{'...' if self.session_cookie and len(self.session_cookie) > 80 else ''}")
-            if self.proxy:
-                lines.append(f"# Proxy: {self.proxy}")
-            lines.append("# (these are baked into every command below)")
-            lines.append("")
-
-        # Tech-specific notes
         if self.sqlmap_notes:
-            lines.append("# === Technology-specific optimizations ===")
-            for note in self.sqlmap_notes:
-                lines.append(f"# {note}")
+            lines.append("# Platform: " + "; ".join(self.sqlmap_notes))
             lines.append("")
 
-        # Batch mode command
-        urls_file = os.path.join(os.path.dirname(path), "sqlmap_urls.txt")
-        batch_flags = f"--batch --smart {all_extra}".strip()
-        lines.append(f"# === Batch scan all URL findings ===")
-        lines.append(f"# sqlmap -m {urls_file} {batch_flags}")
-        lines.append("")
+        # Generate commands sorted by risk: HIGH first, then MEDIUM
+        cmd_count = 0
+        for risk_level in ("HIGH", "MEDIUM"):
+            for i, finding in enumerate(self.findings):
+                if finding.risk_level != risk_level:
+                    continue
 
-        # Individual commands for high-risk findings
-        lines.append("# === Individual high-value targets ===")
-        for i, finding in enumerate(self.findings):
-            if finding.risk_level not in ("HIGH", "MEDIUM"):
-                continue
+                ep = finding.endpoint
+                param = finding.parameter
+                label = f"[{risk_level}] {ep.method} {ep.base_url} → {param.name} ({param.location.value})"
 
-            ep = finding.endpoint
-            param = finding.parameter
-            confirmed = "CONFIRMED" if finding.score >= 0.90 else finding.risk_level
-            lines.append(f"# [{confirmed}] {ep.method} {ep.base_url} -> {param.name}")
+                if risk_level == "MEDIUM":
+                    lines.append('if [ "$HIGH_ONLY" = true ]; then exit 0; fi')
+                    lines.append("")
+                    # Only add this guard once
+                    for j, f2 in enumerate(self.findings):
+                        if f2.risk_level == "MEDIUM":
+                            if j == i:
+                                break
+                    # Remove the duplicate guard if we already added it
+                    if lines[-2] == 'if [ "$HIGH_ONLY" = true ]; then exit 0; fi':
+                        pass  # Keep it
+                    break  # Only add the guard once, then fall through
 
-            if param.location in (ParamLocation.QUERY, ParamLocation.PATH):
-                url = self._build_marked_url(finding)
-                lines.append(f"# sqlmap -u \"{url}\" --batch {all_extra}")
-            elif param.location == ParamLocation.JSON:
-                req_files = [f for f in os.listdir(requests_dir)
-                             if f.startswith(f"{i+1:03d}_")] if os.path.isdir(requests_dir) else []
-                if req_files:
-                    req_path = os.path.join(requests_dir, req_files[0])
-                    lines.append(f"# sqlmap -r \"{req_path}\" -p {param.name} --batch {all_extra}")
-                else:
-                    body = finding._build_request_body() if hasattr(finding, '_build_request_body') else f'{{\"{param.name}\": \"test\"}}'
-                    lines.append(f"# sqlmap -u \"{ep.base_url}\" --method=POST "
-                                 f"--data='{body}' "
-                                 f"--headers=\"Content-Type: application/json\" "
-                                 f"-p {param.name} --batch {all_extra}")
-            elif param.location == ParamLocation.BODY:
-                req_files = [f for f in os.listdir(requests_dir)
-                             if f.startswith(f"{i+1:03d}_")] if os.path.isdir(requests_dir) else []
-                if req_files:
-                    req_path = os.path.join(requests_dir, req_files[0])
-                    lines.append(f"# sqlmap -r \"{req_path}\" --batch {all_extra}")
-                else:
-                    lines.append(f"# sqlmap -u \"{ep.base_url}\" --data=\"{param.name}=test\" --batch {all_extra}")
-            lines.append("")
+            for i, finding in enumerate(self.findings):
+                if finding.risk_level != risk_level:
+                    continue
+
+                ep = finding.endpoint
+                param = finding.parameter
+                confirmed = "CONFIRMED " if finding.score >= 0.90 else ""
+                label = f"{confirmed}[{risk_level}] {ep.method} {ep.base_url} → {param.name}"
+
+                if param.location in (ParamLocation.QUERY, ParamLocation.PATH):
+                    url = self._build_marked_url(finding)
+                    lines.append(f'run_cmd "{label}" sqlmap -u "{url}" --batch {all_extra}')
+                elif param.location == ParamLocation.JSON:
+                    req_files = [f for f in os.listdir(requests_dir)
+                                 if f.startswith(f"{i+1:03d}_")] if os.path.isdir(requests_dir) else []
+                    if req_files:
+                        req_path = os.path.join(requests_dir, req_files[0])
+                        lines.append(f'run_cmd "{label}" sqlmap -r "{req_path}" -p {param.name} --batch {all_extra}')
+                elif param.location == ParamLocation.BODY:
+                    req_files = [f for f in os.listdir(requests_dir)
+                                 if f.startswith(f"{i+1:03d}_")] if os.path.isdir(requests_dir) else []
+                    if req_files:
+                        req_path = os.path.join(requests_dir, req_files[0])
+                        lines.append(f'run_cmd "{label}" sqlmap -r "{req_path}" --batch {all_extra}')
+                elif param.location == ParamLocation.HEADER:
+                    # Header injection — use --header flag
+                    url = ep.base_url
+                    lines.append(f'run_cmd "{label}" sqlmap -u "{url}" '
+                                 f'--header="{param.name}: test*" --batch {all_extra}')
+
+                cmd_count += 1
+                lines.append("")
+
+        lines.append(f'echo ""')
+        lines.append(f'echo "Done — {cmd_count} targets tested."')
 
         with open(path, "w") as f:
             f.write("\n".join(lines))
