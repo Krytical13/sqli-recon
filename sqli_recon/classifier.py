@@ -137,6 +137,24 @@ class Classifier:
                         reasons=reasons,
                     ))
 
+        # Deduplicate: same base_url + method + param name + param location = same finding
+        # Keep highest score, merge sources and reasons
+        deduped = {}
+        for f in findings:
+            key = (f.endpoint.base_url, f.endpoint.method,
+                   f.parameter.name, f.parameter.location)
+            if key in deduped:
+                existing = deduped[key]
+                if f.score > existing.score:
+                    # Keep the higher-scored one but merge source info
+                    f.reasons = _merge_reasons(f.reasons, existing.reasons)
+                    deduped[key] = f
+                else:
+                    existing.reasons = _merge_reasons(existing.reasons, f.reasons)
+            else:
+                deduped[key] = f
+
+        findings = list(deduped.values())
         findings.sort(key=lambda f: (-f.score, f.parameter.name))
         return findings
 
@@ -215,3 +233,14 @@ class Classifier:
                     best_reason = reason
 
         return best_score, best_reason
+
+
+def _merge_reasons(primary, secondary):
+    """Merge two reason lists, avoiding duplicates."""
+    seen = set(primary)
+    merged = list(primary)
+    for r in secondary:
+        if r not in seen:
+            seen.add(r)
+            merged.append(r)
+    return merged
