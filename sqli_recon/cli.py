@@ -528,6 +528,20 @@ def main():
         if not args.quiet and not args.json_only:
             print(f"  Found {len(method_results)} additional method variants")
 
+    # ---- Phase 5b: Header Injection Scan ----
+    if all_endpoints and not captcha_abort:
+        from sqli_recon.intelligence import HeaderInjectionScanner
+        header_scanner = HeaderInjectionScanner(client)
+        header_eps = header_scanner.scan_endpoints(all_endpoints)
+        if header_eps:
+            all_endpoints.extend(header_eps)
+            if not args.quiet and not args.json_only:
+                log_phase("HEADERS")
+                for ep in header_eps:
+                    hdr = ep.parameters[0].name
+                    val = ep.parameters[0].value
+                    log_status(f"{C.RED}Injectable header: {hdr} on {ep.base_url} {val}{C.RESET}")
+
     # ---- Phase 6: GraphQL Introspection ----
     if not scan_rec.get("skip_graphql"):
         gql = GraphQLIntrospector(client, args.url)

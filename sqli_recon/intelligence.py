@@ -164,6 +164,89 @@ class ErrorDetector:
             return None
 
 
+# Injectable headers — these are sometimes logged or used in SQL queries
+INJECTABLE_HEADERS = [
+    ("X-Forwarded-For", "127.0.0.1'"),
+    ("Referer", "http://test.com/'"),
+    ("X-Forwarded-Host", "test.com'"),
+    ("X-Real-IP", "127.0.0.1'"),
+    ("User-Agent", "Mozilla/5.0'"),
+    ("X-Custom-IP-Authorization", "127.0.0.1'"),
+]
+
+
+class HeaderInjectionScanner:
+    """
+    Tests HTTP headers as injection surfaces.
+
+    Some apps log User-Agent, X-Forwarded-For, or Referer to a database
+    using string interpolation. Sending a single quote in these headers
+    can trigger SQL errors if the backend is vulnerable.
+    """
+
+    def __init__(self, client):
+        self.client = client
+
+    def scan_url(self, url):
+        """Test a single URL with injectable headers. Returns list of (header_name, db_type)."""
+        results = []
+
+        for header_name, probe_value in INJECTABLE_HEADERS:
+            try:
+                resp = self.client.get(url, headers={header_name: probe_value})
+                if resp is None:
+                    continue
+
+                db_type = _check_for_db_errors(resp.text)
+                if db_type:
+                    results.append((header_name, db_type))
+                    log.info(f"Header injection found: {header_name} on {url} ({db_type})")
+            except Exception:
+                continue
+
+        return results
+
+    def scan_endpoints(self, endpoints, progress_callback=None):
+        """
+        Test unique base URLs for header injection.
+        Returns list of Endpoints with header params.
+        """
+        from sqli_recon.models import Endpoint, Parameter, ParamLocation, Source
+
+        tested_urls = set()
+        found_endpoints = []
+
+        # Only test unique base URLs — headers apply site-wide
+        urls_to_test = []
+        for ep in endpoints:
+            if ep.base_url not in tested_urls:
+                tested_urls.add(ep.base_url)
+                urls_to_test.append(ep.base_url)
+
+        # Limit to 10 URLs max — header injection is site-wide, not per-endpoint
+        urls_to_test = urls_to_test[:10]
+
+        for i, url in enumerate(urls_to_test):
+            if progress_callback and (i + 1) % 3 == 0:
+                progress_callback(i + 1, len(urls_to_test))
+
+            results = self.scan_url(url)
+            for header_name, db_type in results:
+                found_endpoints.append(Endpoint(
+                    url=url,
+                    method="GET",
+                    parameters=[Parameter(
+                        name=header_name,
+                        location=ParamLocation.HEADER,
+                        value=f"(injectable — {db_type})",
+                        param_type="string",
+                    )],
+                    source=Source.CRAWL,
+                ))
+
+        return found_endpoints
+
+
 def _check_for_db_errors(text):
     """Check response text for database error signatures. Returns DB type or None."""
     if not text:
