@@ -29,6 +29,7 @@ class Mapper:
         self.max_depth = max_depth
         self.rate_limit = rate_limit
         self._last_request = 0.0
+        self._api_calls = 0  # Track paid API usage
 
         keys = api_keys or {}
 
@@ -128,15 +129,17 @@ class Mapper:
             self.whois.lookup_domain(domain, depth)
             self._wait()
 
-        # Shodan DNS/subdomain data
-        if self.shodan:
+        # Shodan DNS/subdomain data (API — only on seed + depth 1 to conserve quota)
+        if self.shodan and depth <= 1:
             self.shodan.search_domain(domain, depth)
             self._wait()
+            self._api_calls += 1
 
-        # Censys host + cert search
-        if self.censys:
+        # Censys host + cert search (API — only on seed + depth 1)
+        if self.censys and depth <= 1:
             self.censys.search_domain(domain, depth)
             self._wait()
+            self._api_calls += 1
 
     def _expand_ip(self, node):
         ip = node.value
@@ -154,15 +157,17 @@ class Mapper:
         self.bgpview.lookup_ip(ip, depth)
         self._wait()
 
-        # Shodan host info (domains, certs, services)
-        if self.shodan:
+        # Shodan host info (API — only on seed + depth 1)
+        if self.shodan and depth <= 1:
             self.shodan.lookup_ip(ip, depth)
             self._wait()
+            self._api_calls += 1
 
-        # Censys host info (domains from certs + DNS)
-        if self.censys:
+        # Censys host info (API — only on seed + depth 1)
+        if self.censys and depth <= 1:
             self.censys.lookup_ip(ip, depth)
             self._wait()
+            self._api_calls += 1
 
     def _expand_org(self, node):
         org = node.value

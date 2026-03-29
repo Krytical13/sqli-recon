@@ -234,7 +234,8 @@ def main():
     elapsed = time.time() - start_time
 
     if not args.quiet and not args.json_only:
-        print(f"\r  Completed in {elapsed:.1f}s{' ' * 50}")
+        api_note = f", {mapper._api_calls} API calls used" if mapper._api_calls > 0 else ""
+        print(f"\r  Completed in {elapsed:.1f}s{api_note}{' ' * 30}")
 
     # Output
     if args.json_only:
