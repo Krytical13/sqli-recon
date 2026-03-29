@@ -249,17 +249,24 @@ def main():
         print_tree(graph, seed.id)
         print_summary(graph)
 
-    # Save files
-    if args.output:
-        os.makedirs(args.output, exist_ok=True)
+    # Auto-generate output dir if not specified
+    output_dir = args.output
+    if not output_dir and not args.json_only:
+        safe_target = target.replace(":", "_").replace(".", "-").replace("/", "")
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        output_dir = f"infra_map_{safe_target}_{timestamp}"
 
-        json_path = os.path.join(args.output, "graph.json")
+    # Save files
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+        json_path = os.path.join(output_dir, "graph.json")
         write_json(graph, json_path)
 
-        domains_path = os.path.join(args.output, "domains.txt")
+        domains_path = os.path.join(output_dir, "domains.txt")
         domain_count = write_domains(graph, domains_path)
 
-        ips_path = os.path.join(args.output, "ips.txt")
+        ips_path = os.path.join(output_dir, "ips.txt")
         ip_count = write_ips(graph, ips_path)
 
         print(f"\n{C.BOLD}Output files:{C.RESET}")
