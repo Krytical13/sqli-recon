@@ -307,9 +307,11 @@ def main():
             log_status(f"Attempting auto-login as '{username}'...")
 
         if session_mgr.auto_login():
+            # Attach session manager to HTTP client for auto re-auth on every request
+            client._session_mgr = session_mgr
             if not args.quiet and not args.json_only:
                 print(f"  {C.GREEN}Login successful — scanning as authenticated user{C.RESET}")
-                # Show the session cookies so user knows what was captured
+                print(f"  {C.DIM}Session will auto-refresh if it expires mid-scan{C.RESET}")
                 cookies = "; ".join(f"{k}={v}" for k, v in client.session.cookies.get_dict().items())
                 if cookies:
                     print(f"  {C.DIM}Session cookies: {cookies[:100]}{'...' if len(cookies) > 100 else ''}{C.RESET}")

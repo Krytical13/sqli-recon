@@ -41,6 +41,8 @@ class HttpClient:
             "timeouts": 0,
         }
         self._captcha_backoff = False  # True when CAPTCHA detected, triggers slowdown
+        self._session_mgr = None      # Set by CLI when --login is used
+        self._reauth_in_progress = False  # Prevent re-login loops
 
         self.session = requests.Session()
 
@@ -162,6 +164,19 @@ class HttpClient:
                 return resp
             else:
                 resp._is_captcha = False
+
+            # Session health check — detect expired sessions on every response
+            if (self._session_mgr and not self._reauth_in_progress
+                    and not self._session_mgr.check_session(resp)):
+                self._reauth_in_progress = True
+                log.info(f"Session expired (detected on {method} {url}), re-authenticating...")
+                if self._session_mgr.ensure_session(resp):
+                    log.info("Re-authentication successful, retrying request")
+                    self._reauth_in_progress = False
+                    # Retry the original request with fresh session
+                    self.stats["requests"] += 1
+                    resp = self.session.request(method, url, **kwargs)
+                self._reauth_in_progress = False
 
             self.stats["success"] += 1
 
