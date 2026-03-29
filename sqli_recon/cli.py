@@ -660,11 +660,67 @@ def main():
         # Re-sort after score changes
         findings.sort(key=lambda f: (-f.score, f.parameter.name))
 
+    # ---- Phase 9b: SSTI Detection ----
+    ssti_confirmed = []
+    cmdi_confirmed = []
+
+    if not captcha_abort:
+        from sqli_recon.intelligence import SSTIDetector, CommandInjectionDetector
+
+        if not args.quiet and not args.json_only:
+            log_phase("SSTI DETECT")
+            log_status("Probing for Server-Side Template Injection...")
+
+        ssti = SSTIDetector(client)
+        ssti_confirmed = ssti.test_findings(findings, min_score=0.2)
+
+        if ssti_confirmed:
+            for finding, engine in ssti_confirmed:
+                key = (finding.endpoint.base_url, finding.parameter.name)
+                for f in findings:
+                    if (f.endpoint.base_url, f.parameter.name) == key:
+                        f.score = max(f.score, 0.95)
+                        f.reasons.insert(0, f"CONFIRMED: SSTI detected ({engine}) — code execution possible")
+
+        if not args.quiet and not args.json_only:
+            if ssti_confirmed:
+                print(f"  {C.RED}{C.BOLD}{len(ssti_confirmed)} SSTI vulnerabilities found!{C.RESET}")
+            else:
+                print(f"  {C.DIM}No SSTI detected{C.RESET}")
+
+        # ---- Phase 9c: Command Injection Detection ----
+        if not args.quiet and not args.json_only:
+            log_phase("CMDI DETECT")
+            log_status("Probing for OS command injection...")
+
+        cmdi = CommandInjectionDetector(client)
+        cmdi_confirmed = cmdi.test_findings(findings, min_score=0.2)
+
+        if cmdi_confirmed:
+            for finding, method in cmdi_confirmed:
+                key = (finding.endpoint.base_url, finding.parameter.name)
+                for f in findings:
+                    if (f.endpoint.base_url, f.parameter.name) == key:
+                        f.score = max(f.score, 0.95)
+                        f.reasons.insert(0, f"CONFIRMED: Command injection ({method}) — RCE possible")
+
+        if not args.quiet and not args.json_only:
+            if cmdi_confirmed:
+                print(f"  {C.RED}{C.BOLD}{len(cmdi_confirmed)} command injection vulnerabilities found!{C.RESET}")
+            else:
+                print(f"  {C.DIM}No command injection detected{C.RESET}")
+
+    # Re-sort after all detection phases
+    if confirmed or ssti_confirmed or cmdi_confirmed:
+        findings.sort(key=lambda f: (-f.score, f.parameter.name))
+
     if not args.quiet and not args.json_only:
-        if confirmed:
-            print(f"\r  {C.RED}{C.BOLD}{len(confirmed)} CONFIRMED injectable params{C.RESET}          ")
+        total_confirmed = len(confirmed) + len(ssti_confirmed) + len(cmdi_confirmed)
+        if total_confirmed:
+            print(f"\n  {C.RED}{C.BOLD}Total confirmed: {len(confirmed)} SQLi, "
+                  f"{len(ssti_confirmed)} SSTI, {len(cmdi_confirmed)} CmdI{C.RESET}")
         else:
-            print(f"\r  No DB errors triggered (params may still be injectable via blind techniques)          ")
+            print(f"  {C.DIM}No confirmed vulnerabilities (params may still be injectable via blind techniques){C.RESET}")
 
     elapsed = time.time() - start_time
 

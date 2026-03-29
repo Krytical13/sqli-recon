@@ -1,4 +1,4 @@
-"""Intelligence modules — error pre-detection, tech fingerprinting, response analysis, GraphQL."""
+"""Intelligence modules — injection detection (SQLi, SSTI, command), tech fingerprinting, response analysis, GraphQL."""
 
 import re
 import json
@@ -105,63 +105,228 @@ class ErrorDetector:
 
     def _test_param(self, finding):
         """Send a single quote and check for DB errors. Returns DB type or None."""
+        resp = _send_probe(self.client, finding.endpoint, finding.parameter, "'")
+        if resp is None:
+            return None
+        return _check_for_db_errors(resp.text)
+
+
+# ============================================================
+# 1b. SSTI (Server-Side Template Injection) Detection
+# ============================================================
+
+# SSTI probes — each is a (payload, expected_output) pair.
+# If the expected output appears in the response, the template engine
+# evaluated our expression = confirmed SSTI.
+SSTI_PROBES = [
+    # Math expression — works in Jinja2, Twig, Freemarker, Mako, Tornado, etc.
+    ("{{7*7}}", "49"),
+    ("${7*7}", "49"),
+    ("#{7*7}", "49"),
+    ("<%= 7*7 %>", "49"),
+    # Jinja2 specific
+    ("{{config}}", "<Config"),
+    # Twig specific
+    ("{{7*'7'}}", "7777777"),
+    # Freemarker
+    ("${7*7}", "49"),
+]
+
+
+class SSTIDetector:
+    """
+    Detects Server-Side Template Injection by sending math expressions
+    and checking if the server evaluates them.
+
+    Safe probes only — 7*7=49 is not exploitation.
+    """
+
+    def __init__(self, client):
+        self.client = client
+
+    def test_findings(self, findings, min_score=0.2, progress_callback=None):
+        """Test findings for SSTI. Returns list of (finding, engine_hint)."""
+        confirmed = []
+        tested = set()
+
+        candidates = [f for f in findings if f.score >= min_score]
+
+        for i, finding in enumerate(candidates):
+            if progress_callback and (i + 1) % 5 == 0:
+                progress_callback(i + 1, len(candidates))
+
+            key = (finding.endpoint.base_url, finding.endpoint.method, finding.parameter.name)
+            if key in tested:
+                continue
+            tested.add(key)
+
+            result = self._test_param(finding)
+            if result:
+                confirmed.append((finding, result))
+
+        return confirmed
+
+    def _test_param(self, finding):
+        """Send SSTI probes to a parameter. Returns engine hint or None."""
         ep = finding.endpoint
         param = finding.parameter
-        probe_value = "'"
 
-        try:
-            if param.location == ParamLocation.QUERY:
-                # Inject into query string
-                parsed = urlparse(ep.url)
-                qs = parse_qs(parsed.query, keep_blank_values=True)
-                qs[param.name] = [probe_value]
-                probe_url = ep.base_url + "?" + urlencode(qs, doseq=True)
-                resp = self.client.get(probe_url)
-
-            elif param.location == ParamLocation.BODY:
-                # Inject into form body
-                data = {}
-                for p in ep.parameters:
-                    if p.location == ParamLocation.BODY:
-                        data[p.name] = p.value or "test"
-                data[param.name] = probe_value
-                resp = self.client.post(ep.base_url, data=data)
-
-            elif param.location == ParamLocation.JSON:
-                # Inject into JSON body
-                body = {}
-                for p in ep.parameters:
-                    if p.location == ParamLocation.JSON:
-                        body[p.name] = p.value or "test"
-                body[param.name] = probe_value
-                resp = self.client.post(
-                    ep.base_url, json=body,
-                    headers={"Content-Type": "application/json"},
-                )
-
-            elif param.location == ParamLocation.PATH:
-                # Inject into path segment — only replace in the path, not hostname
-                parsed = urlparse(ep.url)
-                if param.value and param.value in parsed.path:
-                    new_path = parsed.path.replace(param.value, probe_value, 1)
-                    from urllib.parse import urlunparse
-                    probe_url = urlunparse((parsed.scheme, parsed.netloc, new_path,
-                                            parsed.params, parsed.query, ""))
-                    resp = self.client.get(probe_url)
-                else:
-                    return None
-
-            else:
-                return None
-
+        for payload, expected in SSTI_PROBES:
+            resp = _send_probe(self.client, ep, param, payload)
             if resp is None:
-                return None
+                continue
 
-            return _check_for_db_errors(resp.text)
+            if expected in resp.text:
+                # Determine which engine
+                if "{{" in payload and "7*'7'" in payload:
+                    return "Twig"
+                elif "{{" in payload and "config" in payload:
+                    return "Jinja2"
+                elif "${" in payload:
+                    return "Freemarker/Mako"
+                elif "<%=" in payload:
+                    return "ERB/JSP"
+                return "Unknown template engine"
 
-        except Exception as e:
-            log.debug(f"Error testing {ep.base_url} param {param.name}: {e}")
-            return None
+        return None
+
+
+# ============================================================
+# 1c. Command Injection Detection
+# ============================================================
+
+# Command injection probes — each checks for a known output pattern.
+# These are safe: they run read-only commands that every OS has.
+CMDI_PROBES = [
+    # Time-based: if response is delayed, the command executed
+    # (we check response time, not output)
+
+    # Output-based: inject a command whose output we can recognize
+    # Pipe/semicolon/backtick variants for different contexts
+    ("; echo sqli_recon_cmdi_test", "sqli_recon_cmdi_test"),
+    ("| echo sqli_recon_cmdi_test", "sqli_recon_cmdi_test"),
+    ("` echo sqli_recon_cmdi_test`", "sqli_recon_cmdi_test"),
+    ("$(echo sqli_recon_cmdi_test)", "sqli_recon_cmdi_test"),
+
+    # Windows variants
+    ("& echo sqli_recon_cmdi_test", "sqli_recon_cmdi_test"),
+    ("| echo sqli_recon_cmdi_test", "sqli_recon_cmdi_test"),
+]
+
+# Time-based: sleep command — if response takes >5s longer than baseline, command ran
+CMDI_TIME_PROBES = [
+    "; sleep 5",
+    "| sleep 5",
+    "$(sleep 5)",
+    "` sleep 5`",
+    "& timeout /t 5",  # Windows
+]
+
+
+class CommandInjectionDetector:
+    """
+    Detects OS command injection by sending echo probes and checking
+    if the output appears in the response, or by measuring response
+    time with sleep commands.
+
+    Safe probes only — echo and sleep are read-only.
+    """
+
+    def __init__(self, client):
+        self.client = client
+
+    def test_findings(self, findings, min_score=0.2, progress_callback=None):
+        """Test findings for command injection. Returns list of (finding, method)."""
+        confirmed = []
+        tested = set()
+
+        candidates = [f for f in findings if f.score >= min_score]
+
+        for i, finding in enumerate(candidates):
+            if progress_callback and (i + 1) % 5 == 0:
+                progress_callback(i + 1, len(candidates))
+
+            key = (finding.endpoint.base_url, finding.endpoint.method, finding.parameter.name)
+            if key in tested:
+                continue
+            tested.add(key)
+
+            result = self._test_param(finding)
+            if result:
+                confirmed.append((finding, result))
+
+        return confirmed
+
+    def _test_param(self, finding):
+        """Send command injection probes. Returns detection method or None."""
+        ep = finding.endpoint
+        param = finding.parameter
+
+        # Output-based detection
+        for payload, expected in CMDI_PROBES:
+            resp = _send_probe(self.client, ep, param, payload)
+            if resp is None:
+                continue
+            if expected in resp.text:
+                return "output-based"
+
+        # Time-based detection — measure baseline first
+        import time
+        baseline_start = time.time()
+        _send_probe(self.client, ep, param, "harmless_value")
+        baseline_time = time.time() - baseline_start
+
+        for payload in CMDI_TIME_PROBES:
+            start = time.time()
+            _send_probe(self.client, ep, param, payload)
+            elapsed = time.time() - start
+
+            # If response took 4+ seconds longer than baseline, sleep executed
+            if elapsed > baseline_time + 4:
+                return "time-based"
+
+        return None
+
+
+def _send_probe(client, endpoint, param, value):
+    """Send a probe value to a specific parameter. Returns response or None."""
+    try:
+        if param.location == ParamLocation.QUERY:
+            parsed = urlparse(endpoint.url)
+            qs = parse_qs(parsed.query, keep_blank_values=True)
+            qs[param.name] = [value]
+            probe_url = endpoint.base_url + "?" + urlencode(qs, doseq=True)
+            return client.get(probe_url)
+
+        elif param.location == ParamLocation.BODY:
+            data = {}
+            for p in endpoint.parameters:
+                if p.location == ParamLocation.BODY:
+                    data[p.name] = p.value or "test"
+            data[param.name] = value
+            return client.post(endpoint.base_url, data=data)
+
+        elif param.location == ParamLocation.JSON:
+            body = {}
+            for p in endpoint.parameters:
+                if p.location == ParamLocation.JSON:
+                    body[p.name] = p.value or "test"
+            body[param.name] = value
+            return client.post(endpoint.base_url, json=body,
+                               headers={"Content-Type": "application/json"})
+
+        elif param.location == ParamLocation.PATH:
+            url = endpoint.url
+            if param.value and param.value in urlparse(url).path:
+                parsed = urlparse(url)
+                new_path = parsed.path.replace(param.value, value, 1)
+                from urllib.parse import urlunparse
+                probe_url = urlunparse((parsed.scheme, parsed.netloc, new_path,
+                                        parsed.params, parsed.query, ""))
+                return client.get(probe_url)
+    except Exception:
+        pass
+    return None
 
 
 # Injectable headers — these are sometimes logged or used in SQL queries
