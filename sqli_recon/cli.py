@@ -268,8 +268,16 @@ def main():
         if args.tor:
             print(f"{C.YELLOW}Hint: Is Tor running? (sudo systemctl start tor){C.RESET}", file=sys.stderr)
         sys.exit(1)
+    # Tech fingerprint from probe response
+    from sqli_recon.intelligence import TechFingerprint, ResponseAnalyzer, ErrorDetector, GraphQLIntrospector
+    tech_fp = TechFingerprint()
+    tech_fp.analyze_response(probe)
+
     if not args.quiet and not args.json_only:
         log_status(f"Target reachable ({probe.status_code})")
+        if tech_fp.detected:
+            techs = ", ".join(f"{t} ({c:.0%})" for t, c in tech_fp.summary()[:4])
+            print(f"  {C.DIM}Tech: {techs}{C.RESET}")
 
     all_endpoints = []
     start_time = time.time()
@@ -432,23 +440,92 @@ def main():
         if not args.quiet and not args.json_only:
             print(f"  Found {len(method_results)} additional method variants")
 
-    # ---- Phase 6: Classification ----
+    # ---- Phase 6: GraphQL Introspection ----
+    gql = GraphQLIntrospector(client, args.url)
+    gql_endpoints = gql.discover_and_introspect(known_endpoints=all_endpoints)
+    if gql_endpoints:
+        all_endpoints.extend(gql_endpoints)
+        if not args.quiet and not args.json_only:
+            log_phase("GRAPHQL")
+            args_count = sum(len(e.parameters) for e in gql_endpoints)
+            log_status(f"Introspection succeeded — {len(gql_endpoints)} operations, "
+                       f"{args_count} arguments discovered")
+
+    # ---- Phase 7: Response Analysis ----
+    # Check endpoints that returned data during crawl for DB-row patterns
+    db_like_urls = set()
+    for ep in all_endpoints:
+        if ep.status_code and ep.status_code == 200 and ep.method == "GET":
+            resp = client.get(ep.url)
+            if resp:
+                tech_fp.analyze_response(resp)  # Also feed more pages to tech fingerprint
+                is_db, reason = ResponseAnalyzer.looks_like_db_rows(resp)
+                if is_db:
+                    db_like_urls.add(ep.base_url)
+                    ep.response_headers["_db_like"] = reason
+            # Only check a handful to avoid excess requests
+            if len(db_like_urls) >= 5:
+                break
+
+    # ---- Phase 8: Classification ----
     if not args.quiet and not args.json_only:
         log_phase("CLASSIFY")
         log_status(f"Scoring {sum(len(e.parameters) for e in all_endpoints)} parameters "
                    f"across {len(all_endpoints)} endpoints...")
 
+    # Apply tech fingerprint modifier to classifier
+    tech_modifier = tech_fp.sqli_risk_modifier()
     classifier = Classifier()
-    findings = classifier.classify(all_endpoints)
+    findings = classifier.classify(all_endpoints, tech_modifier=tech_modifier,
+                                    db_like_urls=db_like_urls)
 
     # Apply minimum score filter
     if args.min_score > 0:
         findings = [f for f in findings if f.score >= args.min_score]
 
+    # ---- Phase 9: Error-based pre-detection ----
+    if not args.quiet and not args.json_only:
+        log_phase("ERROR DETECT")
+        log_status("Probing high-value params for DB error responses...")
+
+    detector = ErrorDetector(client)
+
+    def error_progress(done, total):
+        if not args.quiet and not args.json_only:
+            print(f"\r  {C.DIM}Tested {done}/{total} params{C.RESET}    ", end="", flush=True)
+
+    confirmed = detector.test_findings(findings, min_score=0.3, progress_callback=error_progress)
+
+    if confirmed:
+        # Promote confirmed findings to HIGH with DB type info
+        confirmed_keys = {}
+        for finding, db_type in confirmed:
+            key = (finding.endpoint.base_url, finding.parameter.name)
+            confirmed_keys[key] = db_type
+
+        for f in findings:
+            key = (f.endpoint.base_url, f.parameter.name)
+            if key in confirmed_keys:
+                db_type = confirmed_keys[key]
+                f.score = max(f.score, 0.90)
+                f.reasons.insert(0, f"CONFIRMED: DB error detected ({db_type}) — injectable")
+
+        # Re-sort after score changes
+        findings.sort(key=lambda f: (-f.score, f.parameter.name))
+
+    if not args.quiet and not args.json_only:
+        if confirmed:
+            print(f"\r  {C.RED}{C.BOLD}{len(confirmed)} CONFIRMED injectable params{C.RESET}          ")
+        else:
+            print(f"\r  No DB errors triggered (params may still be injectable via blind techniques)          ")
+
     elapsed = time.time() - start_time
 
     if not args.quiet and not args.json_only:
         print(f"  Completed in {elapsed:.1f}s")
+        if tech_fp.detected:
+            techs = ", ".join(f"{t}" for t, c in tech_fp.summary()[:5])
+            print(f"  {C.DIM}Stack: {techs} (modifier: {tech_modifier:+.2f}){C.RESET}")
 
     # ---- Network stats ----
     if not args.quiet and not args.json_only:

@@ -99,12 +99,18 @@ HEADER_SIGNALS = [
 class Classifier:
     """Scores endpoint parameters by SQLi likelihood."""
 
-    def classify(self, endpoints):
+    def classify(self, endpoints, tech_modifier=0.0, db_like_urls=None):
         """
         Score all parameters across all endpoints.
+
+        Args:
+            tech_modifier: Score adjustment from tech fingerprinting (+/- value)
+            db_like_urls: Set of base_urls whose responses look like DB rows (bonus)
+
         Returns list of Finding objects sorted by score (highest first).
         """
         findings = []
+        db_like_urls = db_like_urls or set()
 
         for endpoint in endpoints:
             if not endpoint.parameters:
@@ -112,7 +118,18 @@ class Classifier:
 
             for param in endpoint.parameters:
                 score, reasons = self._score_parameter(endpoint, param)
-                if score > 0.05:  # Filter out noise
+
+                # Tech fingerprint modifier
+                if tech_modifier != 0:
+                    score += tech_modifier
+
+                # Response looks like DB rows
+                if endpoint.base_url in db_like_urls:
+                    score += 0.08
+                    db_reason = endpoint.response_headers.get("_db_like", "structured data")
+                    reasons.append(f"response looks like DB output ({db_reason})")
+
+                if score > 0.05:
                     findings.append(Finding(
                         endpoint=endpoint,
                         parameter=param,
@@ -120,7 +137,6 @@ class Classifier:
                         reasons=reasons,
                     ))
 
-        # Sort by score descending, then by parameter name
         findings.sort(key=lambda f: (-f.score, f.parameter.name))
         return findings
 

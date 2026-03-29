@@ -386,6 +386,61 @@ def internal_debug():
     return jsonify({"debug": True, "verbose": verbose, "db": "sqlite::memory:"})
 
 
+# ---- GraphQL (simplified, supports introspection) ----
+
+@app.route("/graphql", methods=["POST"])
+def graphql_endpoint():
+    data = request.get_json(silent=True) or {}
+    query = data.get("query", "")
+
+    # Handle introspection
+    if "__schema" in query:
+        return jsonify({"data": {"__schema": {
+            "queryType": {"name": "Query"},
+            "mutationType": {"name": "Mutation"},
+            "types": [
+                {
+                    "name": "Query",
+                    "kind": "OBJECT",
+                    "fields": [
+                        {"name": "user", "args": [
+                            {"name": "id", "type": {"name": "Int", "kind": "SCALAR", "ofType": None}},
+                        ]},
+                        {"name": "users", "args": [
+                            {"name": "role", "type": {"name": "String", "kind": "SCALAR", "ofType": None}},
+                            {"name": "limit", "type": {"name": "Int", "kind": "SCALAR", "ofType": None}},
+                            {"name": "sortBy", "type": {"name": "String", "kind": "SCALAR", "ofType": None}},
+                        ]},
+                        {"name": "product", "args": [
+                            {"name": "id", "type": {"name": "Int", "kind": "SCALAR", "ofType": None}},
+                        ]},
+                        {"name": "searchProducts", "args": [
+                            {"name": "query", "type": {"name": "String", "kind": "SCALAR", "ofType": None}},
+                            {"name": "category", "type": {"name": "String", "kind": "SCALAR", "ofType": None}},
+                            {"name": "minPrice", "type": {"name": "Float", "kind": "SCALAR", "ofType": None}},
+                        ]},
+                    ],
+                },
+                {
+                    "name": "Mutation",
+                    "kind": "OBJECT",
+                    "fields": [
+                        {"name": "updateUser", "args": [
+                            {"name": "id", "type": {"name": "Int", "kind": "SCALAR", "ofType": None}},
+                            {"name": "name", "type": {"name": "String", "kind": "SCALAR", "ofType": None}},
+                            {"name": "email", "type": {"name": "String", "kind": "SCALAR", "ofType": None}},
+                        ]},
+                        {"name": "deleteProduct", "args": [
+                            {"name": "id", "type": {"name": "Int", "kind": "SCALAR", "ofType": None}},
+                        ]},
+                    ],
+                },
+            ],
+        }}})
+
+    return jsonify({"errors": [{"message": "Query not supported in test app"}]})
+
+
 # ---- Static JS files ----
 
 @app.route("/static/js/app.js")
