@@ -6,6 +6,7 @@ import logging
 from infra_map.graph import InfraGraph, NodeType
 from infra_map.sources import (
     CrtSh, DNSResolver, HackerTarget, WaybackMachine, BGPView, Whois,
+    ShodanAPI, CensysAPI,
 )
 
 log = logging.getLogger(__name__)
@@ -18,22 +19,35 @@ class Mapper:
     Starting from a seed (domain or IP), queries free public sources,
     discovers new entities, and recursively expands until max_depth
     or no new nodes are found.
+
+    Optional Shodan/Censys API keys enhance results when present.
     """
 
     def __init__(self, session, graph: InfraGraph, max_depth=2, rate_limit=1.0,
-                 skip_whois=False, skip_wayback=False):
+                 skip_whois=False, skip_wayback=False, api_keys=None):
         self.graph = graph
         self.max_depth = max_depth
         self.rate_limit = rate_limit
         self._last_request = 0.0
 
-        # Initialize sources
+        keys = api_keys or {}
+
+        # Free sources (always available)
         self.crtsh = CrtSh(session, graph)
         self.dns = DNSResolver(session, graph)
         self.hackertarget = HackerTarget(session, graph)
         self.wayback = WaybackMachine(session, graph) if not skip_wayback else None
         self.bgpview = BGPView(session, graph)
         self.whois = Whois(session, graph) if not skip_whois else None
+
+        # Optional API sources
+        self.shodan = None
+        self.censys = None
+
+        if keys.get("shodan"):
+            self.shodan = ShodanAPI(session, graph, keys["shodan"])
+        if keys.get("censys_id") and keys.get("censys_secret"):
+            self.censys = CensysAPI(session, graph, keys["censys_id"], keys["censys_secret"])
 
     def _wait(self):
         elapsed = time.time() - self._last_request
@@ -114,6 +128,16 @@ class Mapper:
             self.whois.lookup_domain(domain, depth)
             self._wait()
 
+        # Shodan DNS/subdomain data
+        if self.shodan:
+            self.shodan.search_domain(domain, depth)
+            self._wait()
+
+        # Censys host + cert search
+        if self.censys:
+            self.censys.search_domain(domain, depth)
+            self._wait()
+
     def _expand_ip(self, node):
         ip = node.value
         depth = node.depth
@@ -129,6 +153,16 @@ class Mapper:
         # ASN / org lookup
         self.bgpview.lookup_ip(ip, depth)
         self._wait()
+
+        # Shodan host info (domains, certs, services)
+        if self.shodan:
+            self.shodan.lookup_ip(ip, depth)
+            self._wait()
+
+        # Censys host info (domains from certs + DNS)
+        if self.censys:
+            self.censys.lookup_ip(ip, depth)
+            self._wait()
 
     def _expand_org(self, node):
         org = node.value

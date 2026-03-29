@@ -1,4 +1,4 @@
-"""Data sources — all free, no API keys, no accounts required."""
+"""Data sources — free public sources + optional Shodan/Censys API."""
 
 import re
 import json
@@ -428,6 +428,276 @@ class Whois(SourceBase):
                 if ns_domain != domain:
                     self.graph.add_node(NodeType.DOMAIN, ns, depth=depth + 1,
                                         source=self.name, metadata={"role": "nameserver"})
+
+
+# ---- Optional API sources (require keys, skip silently without them) ----
+
+
+class ShodanAPI(SourceBase):
+    """Shodan API — host info, reverse DNS, banner data. Requires API key."""
+
+    name = "shodan"
+
+    def __init__(self, session, graph, api_key):
+        super().__init__(session, graph)
+        self.api_key = api_key
+        self.base = "https://api.shodan.io"
+
+    def lookup_ip(self, ip, depth):
+        """Get all host info for an IP — domains, ports, certs, org."""
+        resp = self._get(f"{self.base}/shodan/host/{ip}?key={self.api_key}")
+        if resp is None:
+            return
+
+        try:
+            data = resp.json()
+        except (ValueError, TypeError):
+            return
+
+        # Hostnames (reverse DNS + cert-derived)
+        for hostname in data.get("hostnames", []):
+            h = hostname.strip().lower()
+            if h and _is_valid_domain(h):
+                self.graph.add_node(NodeType.DOMAIN, h, depth=depth + 1, source=self.name)
+                self.graph.add_edge(
+                    NodeType.IP, ip, NodeType.DOMAIN, h,
+                    EdgeType.REVERSE_DNS, self.name,
+                )
+
+        # Domains (base domains Shodan associates with this IP)
+        for domain in data.get("domains", []):
+            d = domain.strip().lower()
+            if d and _is_valid_domain(d):
+                self.graph.add_node(NodeType.DOMAIN, d, depth=depth + 1, source=self.name)
+                self.graph.add_edge(
+                    NodeType.IP, ip, NodeType.DOMAIN, d,
+                    EdgeType.SAME_HOST, self.name,
+                )
+
+        # Organization
+        org = data.get("org", "")
+        if org:
+            self.graph.add_node(NodeType.ORG, org, depth=depth + 1, source=self.name)
+            self.graph.add_edge(
+                NodeType.IP, ip, NodeType.ORG, org,
+                EdgeType.ASN_OWNED_BY, self.name,
+            )
+
+        # ASN
+        asn = data.get("asn", "")
+        if asn:
+            asn_num = asn.replace("AS", "")
+            self.graph.add_node(NodeType.ASN, asn_num, depth=depth + 1,
+                                source=self.name, metadata={"org": org})
+            self.graph.add_edge(
+                NodeType.IP, ip, NodeType.ASN, asn_num,
+                EdgeType.BELONGS_TO_ASN, self.name,
+            )
+
+        # SSL certs — extract SANs from each service's cert
+        for service in data.get("data", []):
+            ssl_info = service.get("ssl", {})
+            if not ssl_info:
+                continue
+            cert = ssl_info.get("cert", {})
+            extensions = cert.get("extensions", []) if cert else []
+            # Subject Alternative Names
+            sans = []
+            for ext in extensions:
+                if ext.get("short_name") == "subjectAltName":
+                    for val in ext.get("data", "").split(","):
+                        val = val.strip()
+                        if val.startswith("DNS:"):
+                            san_domain = val[4:].strip().lower()
+                            if san_domain.startswith("*."):
+                                san_domain = san_domain[2:]
+                            sans.append(san_domain)
+
+            # Also check the simpler path Shodan sometimes uses
+            subject = cert.get("subject", {})
+            cn = subject.get("CN", "") if subject else ""
+            if cn and _is_valid_domain(cn.lower()):
+                sans.append(cn.lower())
+
+            for san in sans:
+                if san and _is_valid_domain(san):
+                    self.graph.add_node(NodeType.DOMAIN, san, depth=depth + 1, source=self.name)
+                    self.graph.add_edge(
+                        NodeType.IP, ip, NodeType.DOMAIN, san,
+                        EdgeType.CERT_COVERS, self.name,
+                    )
+
+    def search_domain(self, domain, depth):
+        """Search Shodan for hosts associated with a domain."""
+        resp = self._get(f"{self.base}/dns/domain/{domain}?key={self.api_key}")
+        if resp is None:
+            return
+
+        try:
+            data = resp.json()
+        except (ValueError, TypeError):
+            return
+
+        for record in data.get("data", []):
+            subdomain = record.get("subdomain", "")
+            rtype = record.get("type", "")
+            value = record.get("value", "")
+
+            if subdomain:
+                fqdn = f"{subdomain}.{domain}".lower()
+            else:
+                fqdn = domain
+
+            if fqdn and _is_valid_domain(fqdn):
+                self.graph.add_node(NodeType.DOMAIN, fqdn, depth=depth + 1, source=self.name)
+                if fqdn != domain:
+                    self.graph.add_edge(
+                        NodeType.DOMAIN, domain, NodeType.DOMAIN, fqdn,
+                        EdgeType.RESOLVES_TO, self.name,
+                    )
+
+            if rtype in ("A", "AAAA") and value and _is_valid_ip(value):
+                self.graph.add_node(NodeType.IP, value, depth=depth + 1, source=self.name)
+                self.graph.add_edge(
+                    NodeType.DOMAIN, fqdn, NodeType.IP, value,
+                    EdgeType.RESOLVES_TO, self.name,
+                )
+
+
+class CensysAPI(SourceBase):
+    """Censys Search API — host and certificate search. Requires API ID + secret."""
+
+    name = "censys"
+
+    def __init__(self, session, graph, api_id, api_secret):
+        super().__init__(session, graph)
+        self.auth = (api_id, api_secret)
+        self.base = "https://search.censys.io/api"
+
+    def _api_get(self, url, params=None):
+        try:
+            resp = self.session.get(url, auth=self.auth, params=params, timeout=self.timeout)
+            if resp.status_code == 200:
+                return resp
+            log.debug(f"{self.name}: {url} returned {resp.status_code}")
+        except requests.RequestException as e:
+            log.debug(f"{self.name}: {url} failed: {e}")
+        return None
+
+    def lookup_ip(self, ip, depth):
+        """Get host details — services, certs, domains."""
+        resp = self._api_get(f"{self.base}/v2/hosts/{ip}")
+        if resp is None:
+            return
+
+        try:
+            data = resp.json().get("result", {})
+        except (ValueError, TypeError):
+            return
+
+        # DNS names Censys associates with this host
+        for name in data.get("dns", {}).get("names", []):
+            d = name.strip().lower()
+            if d.startswith("*."):
+                d = d[2:]
+            if d and _is_valid_domain(d):
+                self.graph.add_node(NodeType.DOMAIN, d, depth=depth + 1, source=self.name)
+                self.graph.add_edge(
+                    NodeType.IP, ip, NodeType.DOMAIN, d,
+                    EdgeType.CERT_COVERS, self.name,
+                )
+
+        # Reverse DNS
+        for name in data.get("dns", {}).get("reverse_dns", {}).get("names", []):
+            d = name.strip().lower()
+            if d and _is_valid_domain(d):
+                self.graph.add_node(NodeType.DOMAIN, d, depth=depth + 1, source=self.name)
+                self.graph.add_edge(
+                    NodeType.IP, ip, NodeType.DOMAIN, d,
+                    EdgeType.REVERSE_DNS, self.name,
+                )
+
+        # Services — extract certs from each
+        for service in data.get("services", []):
+            tls = service.get("tls", {})
+            certs = tls.get("certificates", {})
+            leaf = certs.get("leaf_data", {})
+            sans = leaf.get("subject_alt_name", {}).get("dns_names", [])
+            for san in sans:
+                d = san.strip().lower()
+                if d.startswith("*."):
+                    d = d[2:]
+                if d and _is_valid_domain(d):
+                    self.graph.add_node(NodeType.DOMAIN, d, depth=depth + 1, source=self.name)
+                    self.graph.add_edge(
+                        NodeType.IP, ip, NodeType.DOMAIN, d,
+                        EdgeType.CERT_COVERS, self.name,
+                    )
+
+            # Subject CN
+            cn = leaf.get("subject", {}).get("common_name", [])
+            if isinstance(cn, list):
+                cn = cn[0] if cn else ""
+            if cn:
+                d = cn.strip().lower()
+                if d.startswith("*."):
+                    d = d[2:]
+                if d and _is_valid_domain(d):
+                    self.graph.add_node(NodeType.DOMAIN, d, depth=depth + 1, source=self.name)
+                    self.graph.add_edge(
+                        NodeType.IP, ip, NodeType.DOMAIN, d,
+                        EdgeType.CERT_COVERS, self.name,
+                    )
+
+        # ASN info
+        asn_info = data.get("autonomous_system", {})
+        asn = str(asn_info.get("asn", ""))
+        org = asn_info.get("description", "")
+        if asn:
+            self.graph.add_node(NodeType.ASN, asn, depth=depth + 1,
+                                source=self.name, metadata={"org": org})
+            self.graph.add_edge(
+                NodeType.IP, ip, NodeType.ASN, asn,
+                EdgeType.BELONGS_TO_ASN, self.name,
+            )
+        if org:
+            self.graph.add_node(NodeType.ORG, org, depth=depth + 1, source=self.name)
+
+    def search_domain(self, domain, depth):
+        """Search for hosts serving a domain (via cert or DNS)."""
+        query = f"dns.names: {domain} or services.tls.certificates.leaf_data.subject_alt_name.dns_names: {domain}"
+        resp = self._api_get(f"{self.base}/v2/hosts/search", params={
+            "q": query,
+            "per_page": 25,
+        })
+        if resp is None:
+            return
+
+        try:
+            data = resp.json()
+        except (ValueError, TypeError):
+            return
+
+        for hit in data.get("result", {}).get("hits", []):
+            ip = hit.get("ip", "")
+            if ip and _is_valid_ip(ip):
+                self.graph.add_node(NodeType.IP, ip, depth=depth + 1, source=self.name)
+                self.graph.add_edge(
+                    NodeType.DOMAIN, domain, NodeType.IP, ip,
+                    EdgeType.RESOLVES_TO, self.name,
+                )
+
+            # Additional domain names from this host's certs/DNS
+            for name in hit.get("dns", {}).get("names", []):
+                d = name.strip().lower()
+                if d.startswith("*."):
+                    d = d[2:]
+                if d and d != domain and _is_valid_domain(d):
+                    self.graph.add_node(NodeType.DOMAIN, d, depth=depth + 1, source=self.name)
+                    self.graph.add_edge(
+                        NodeType.DOMAIN, domain, NodeType.DOMAIN, d,
+                        EdgeType.SHARES_CERT, self.name,
+                    )
 
 
 # ---- Helpers ----

@@ -44,10 +44,18 @@ data sources (all free, no API keys):
   Wayback Machine  Historical subdomains from web archives
   BGPView          ASN and IP prefix lookups
   WHOIS            Registrant organization and email
+
+optional API sources (keys in ~/.config/infra_map/keys.conf):
+  Shodan           Host info, certs, banners, domains per IP
+  Censys           Deep cert search, DNS names, host services
         """,
     )
 
-    p.add_argument("target", help="Seed domain or IP address to start mapping from")
+    p.add_argument("--setup-keys", action="store_true",
+                   help="Create API key config file at ~/.config/infra_map/keys.conf and exit")
+
+    p.add_argument("target", nargs="?", default=None,
+                   help="Seed domain or IP address to start mapping from")
     p.add_argument("--depth", type=int, default=2,
                    help="Maximum recursion depth (default: 2, higher = slower but broader)")
     p.add_argument("--rate-limit", type=float, default=1.5,
@@ -109,6 +117,18 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
+    # --setup-keys: create config template and exit
+    if args.setup_keys:
+        from infra_map.config import setup_config
+        path = setup_config()
+        print(f"Config file created: {path}")
+        print(f"Edit it to add your API keys (Shodan, Censys).")
+        print(f"Keys are optional — everything works without them.")
+        return
+
+    if not args.target:
+        parser.error("target is required (domain or IP)")
+
     if args.verbose:
         logging.basicConfig(level=logging.DEBUG, format="%(levelname)s %(name)s: %(message)s")
     elif not args.quiet:
@@ -156,6 +176,10 @@ def main():
         target = target.replace("https://", "").replace("http://", "").split("/")[0]
         seed_type = NodeType.DOMAIN
 
+    # Load API keys (optional)
+    from infra_map.config import load_keys, has_any_keys
+    api_keys = load_keys()
+
     # Initialize graph with seed
     graph = InfraGraph()
     seed = graph.add_node(seed_type, target, depth=0, source="seed")
@@ -165,12 +189,23 @@ def main():
         print(f"  {C.BOLD}Seed:{C.RESET}      {target} ({type_label})")
         print(f"  {C.BOLD}Depth:{C.RESET}     {args.depth}")
         print(f"  {C.BOLD}Rate:{C.RESET}      {rate_limit}s between requests")
-        sources = ["crt.sh", "dns", "hackertarget", "bgpview"]
+
+        free_sources = ["crt.sh", "dns", "hackertarget", "bgpview"]
         if not args.no_wayback:
-            sources.append("wayback")
+            free_sources.append("wayback")
         if not args.no_whois:
-            sources.append("whois")
-        print(f"  {C.BOLD}Sources:{C.RESET}   {', '.join(sources)}")
+            free_sources.append("whois")
+        print(f"  {C.BOLD}Sources:{C.RESET}   {', '.join(free_sources)}")
+
+        api_sources = []
+        if api_keys.get("shodan"):
+            api_sources.append("shodan")
+        if api_keys.get("censys_id") and api_keys.get("censys_secret"):
+            api_sources.append("censys")
+        if api_sources:
+            print(f"  {C.BOLD}API:{C.RESET}       {C.GREEN}{', '.join(api_sources)}{C.RESET}")
+        else:
+            print(f"  {C.BOLD}API:{C.RESET}       {C.DIM}none (add keys to ~/.config/infra_map/keys.conf){C.RESET}")
 
     # Run mapper
     mapper = Mapper(
@@ -180,6 +215,7 @@ def main():
         rate_limit=rate_limit,
         skip_whois=args.no_whois,
         skip_wayback=args.no_wayback,
+        api_keys=api_keys,
     )
 
     start_time = time.time()
