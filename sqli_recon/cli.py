@@ -427,22 +427,29 @@ def main():
             log_phase("API BRUTE")
             log_status("Testing common API paths...")
 
-        api_found = 0
-        for i, path in enumerate(API_PATHS):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from sqli_recon.models import Source
+        api_found = [0]
+        done_count = [0]
+
+        def _test_api_path(path):
             url = f"{parsed.scheme}://{parsed.netloc}{path}"
             resp = client.get(url)
+            done_count[0] += 1
             if resp is not None and resp.status_code not in (404, 403, 500, 502, 503):
-                from sqli_recon.models import Source
-                ep = _url_to_endpoint(url, resp, Source.API_BRUTE)
-                all_endpoints.append(ep)
-                api_found += 1
+                return _url_to_endpoint(url, resp, Source.API_BRUTE)
+            return None
 
-            if not args.quiet and not args.json_only and (i + 1) % 10 == 0:
-                print(f"\r  {C.DIM}Tested {i+1}/{len(API_PATHS)} paths, found {api_found}{C.RESET}    ",
-                      end="", flush=True)
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            futures = {pool.submit(_test_api_path, p): p for p in API_PATHS}
+            for future in as_completed(futures):
+                ep = future.result()
+                if ep:
+                    all_endpoints.append(ep)
+                    api_found[0] += 1
 
         if not args.quiet and not args.json_only:
-            print(f"\r  Discovered {api_found} live API endpoints from {len(API_PATHS)} tested           ")
+            print(f"\r  Discovered {api_found[0]} live API endpoints from {len(API_PATHS)} tested           ")
 
     # ---- Phase 3: JavaScript Analysis ----
     if do_js and js_urls:

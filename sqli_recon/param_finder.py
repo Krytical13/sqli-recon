@@ -37,15 +37,21 @@ class ParamFinder:
         """
         results = []
         total = len(endpoints)
+        done = [0]  # Mutable counter for thread-safe progress
 
-        for i, endpoint in enumerate(endpoints):
-            if progress_callback and (i + 1) % 2 == 0:
-                progress_callback(i + 1, total)
+        def _fuzz_one(endpoint):
+            result = self._fuzz_endpoint(endpoint)
+            done[0] += 1
+            if progress_callback and done[0] % 2 == 0:
+                progress_callback(done[0], total)
+            return result
 
-            # Only fuzz endpoints that seem worth it (have a base URL that responds)
-            found = self._fuzz_endpoint(endpoint)
-            if found:
-                results.append(found)
+        with ThreadPoolExecutor(max_workers=self.threads) as pool:
+            futures = {pool.submit(_fuzz_one, ep): ep for ep in endpoints}
+            for future in as_completed(futures):
+                found = future.result()
+                if found:
+                    results.append(found)
 
         if progress_callback:
             progress_callback(total, total)

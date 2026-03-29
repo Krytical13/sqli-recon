@@ -63,32 +63,43 @@ class ErrorDetector:
     def __init__(self, client):
         self.client = client
 
-    def test_findings(self, findings, min_score=0.3, progress_callback=None):
+    def test_findings(self, findings, min_score=0.3, max_workers=3, progress_callback=None):
         """
         Test high-scoring findings for error-based confirmation.
         Returns list of (finding, db_type) tuples for confirmed injectable params.
         """
-        confirmed = []
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         candidates = [f for f in findings if f.score >= min_score]
 
         # Deduplicate — don't test the same endpoint+param twice
         tested = set()
+        unique_candidates = []
+        for f in candidates:
+            key = (f.endpoint.base_url, f.endpoint.method, f.parameter.name)
+            if key not in tested:
+                tested.add(key)
+                unique_candidates.append(f)
 
-        for i, finding in enumerate(candidates):
-            if progress_callback and (i + 1) % 3 == 0:
-                progress_callback(i + 1, len(candidates))
+        confirmed = []
+        done = [0]
 
-            key = (finding.endpoint.base_url, finding.endpoint.method, finding.parameter.name)
-            if key in tested:
-                continue
-            tested.add(key)
-
+        def _test_one(finding):
             db_type = self._test_param(finding)
-            if db_type:
-                confirmed.append((finding, db_type))
+            done[0] += 1
+            if progress_callback and done[0] % 3 == 0:
+                progress_callback(done[0], len(unique_candidates))
+            return (finding, db_type) if db_type else None
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_test_one, f): f for f in unique_candidates}
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    confirmed.append(result)
 
         if progress_callback:
-            progress_callback(len(candidates), len(candidates))
+            progress_callback(len(unique_candidates), len(unique_candidates))
 
         return confirmed
 
