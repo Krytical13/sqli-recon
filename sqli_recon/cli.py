@@ -107,6 +107,8 @@ examples:
                      help="Disable SSL certificate verification")
     net.add_argument("--user-agent", type=str, default=None,
                      help="Custom User-Agent string")
+    net.add_argument("--login", type=str, default=None, metavar="USER:PASS",
+                     help="Auto-login with credentials (format: 'username:password')")
     net.add_argument("--cookie", type=str, default=None,
                      help="Cookies (format: 'name=value; name2=value2')")
     net.add_argument("--header", action="append", default=[],
@@ -278,6 +280,32 @@ def main():
         if tech_fp.detected:
             techs = ", ".join(f"{t} ({c:.0%})" for t, c in tech_fp.summary()[:4])
             print(f"  {C.DIM}Tech: {techs}{C.RESET}")
+
+    # ---- Auth: auto-login if credentials provided ----
+    from sqli_recon.auth import SessionManager
+    credentials = None
+    session_mgr = None
+
+    if args.login:
+        if ":" not in args.login:
+            print(f"{C.RED}Error: --login format is username:password{C.RESET}", file=sys.stderr)
+            sys.exit(1)
+        username, password = args.login.split(":", 1)
+        credentials = {"username": username, "password": password}
+
+        session_mgr = SessionManager(client, args.url, credentials)
+
+        if not args.quiet and not args.json_only:
+            log_phase("AUTH")
+            log_status(f"Attempting auto-login as '{username}'...")
+
+        if session_mgr.auto_login():
+            if not args.quiet and not args.json_only:
+                print(f"  {C.GREEN}Login successful — scanning as authenticated user{C.RESET}")
+        else:
+            if not args.quiet and not args.json_only:
+                print(f"  {C.YELLOW}Login failed — continuing as unauthenticated{C.RESET}")
+                print(f"  {C.DIM}Try --cookie with manually obtained session cookies instead{C.RESET}")
 
     all_endpoints = []
     start_time = time.time()
