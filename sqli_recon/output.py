@@ -46,11 +46,15 @@ def colorize_risk(risk):
 class OutputGenerator:
     """Generates all output formats from a list of Findings."""
 
-    def __init__(self, findings, output_dir=None, sqlmap_extra_flags=None, sqlmap_notes=None):
+    def __init__(self, findings, output_dir=None, sqlmap_extra_flags=None,
+                 sqlmap_notes=None, session_cookie=None, user_agent=None, proxy=None):
         self.findings = findings
         self.output_dir = output_dir
         self.sqlmap_extra_flags = sqlmap_extra_flags or []
         self.sqlmap_notes = sqlmap_notes or []
+        self.session_cookie = session_cookie  # Full cookie string from auth
+        self.user_agent = user_agent
+        self.proxy = proxy
 
     def generate_all(self):
         """Generate all output files and print summary."""
@@ -143,13 +147,31 @@ class OutputGenerator:
     # ---- sqlmap request files (for -r flag) ----
 
     def write_sqlmap_requests(self, directory):
-        """Write individual request files for sqlmap -r."""
+        """Write individual request files for sqlmap -r.
+
+        Injects session cookies and user-agent into each request file
+        so sqlmap uses the authenticated session automatically.
+        """
         count = 0
 
         for i, finding in enumerate(self.findings):
             request_text = finding.sqlmap_request()
             if not request_text:
                 continue
+
+            # Inject session cookie and user-agent into the request
+            if self.session_cookie and "Cookie:" not in request_text:
+                request_text = request_text.replace(
+                    "Connection: close",
+                    f"Cookie: {self.session_cookie}\r\nConnection: close",
+                )
+            if self.user_agent:
+                # Replace the default UA with the authenticated session's UA
+                request_text = re.sub(
+                    r"User-Agent: [^\r\n]+",
+                    f"User-Agent: {self.user_agent}",
+                    request_text,
+                )
 
             # Generate descriptive filename
             ep = finding.endpoint
@@ -206,12 +228,35 @@ class OutputGenerator:
         """Write a shell script with suggested sqlmap commands for each finding."""
         extra = " ".join(self.sqlmap_extra_flags)
 
+        # Build session flags that get appended to every command
+        session_flags = []
+        if self.session_cookie:
+            session_flags.append(f'--cookie="{self.session_cookie}"')
+        if self.user_agent:
+            session_flags.append(f'--user-agent="{self.user_agent}"')
+        if self.proxy:
+            session_flags.append(f'--proxy={self.proxy}')
+        session_str = " ".join(session_flags)
+
+        # Combine all extra flags
+        all_extra = f"{extra} {session_str}".strip()
+
         lines = [
             "#!/bin/bash",
             "# Auto-generated sqlmap commands from sqli_recon",
             "# Review and adjust before running!",
             "",
         ]
+
+        # Session info
+        if session_flags:
+            lines.append("# === Session (from auto-login or --cookie) ===")
+            if self.session_cookie:
+                lines.append(f"# Cookie: {self.session_cookie[:80]}{'...' if self.session_cookie and len(self.session_cookie) > 80 else ''}")
+            if self.proxy:
+                lines.append(f"# Proxy: {self.proxy}")
+            lines.append("# (these are baked into every command below)")
+            lines.append("")
 
         # Tech-specific notes
         if self.sqlmap_notes:
@@ -222,7 +267,7 @@ class OutputGenerator:
 
         # Batch mode command
         urls_file = os.path.join(os.path.dirname(path), "sqlmap_urls.txt")
-        batch_flags = f"--batch --smart {extra}".strip()
+        batch_flags = f"--batch --smart {all_extra}".strip()
         lines.append(f"# === Batch scan all URL findings ===")
         lines.append(f"# sqlmap -m {urls_file} {batch_flags}")
         lines.append("")
@@ -240,27 +285,27 @@ class OutputGenerator:
 
             if param.location in (ParamLocation.QUERY, ParamLocation.PATH):
                 url = self._build_marked_url(finding)
-                lines.append(f"# sqlmap -u \"{url}\" --batch {extra}")
+                lines.append(f"# sqlmap -u \"{url}\" --batch {all_extra}")
             elif param.location == ParamLocation.JSON:
                 req_files = [f for f in os.listdir(requests_dir)
                              if f.startswith(f"{i+1:03d}_")] if os.path.isdir(requests_dir) else []
                 if req_files:
                     req_path = os.path.join(requests_dir, req_files[0])
-                    lines.append(f"# sqlmap -r \"{req_path}\" -p {param.name} --batch {extra}")
+                    lines.append(f"# sqlmap -r \"{req_path}\" -p {param.name} --batch {all_extra}")
                 else:
                     body = finding._build_request_body() if hasattr(finding, '_build_request_body') else f'{{\"{param.name}\": \"test\"}}'
                     lines.append(f"# sqlmap -u \"{ep.base_url}\" --method=POST "
                                  f"--data='{body}' "
                                  f"--headers=\"Content-Type: application/json\" "
-                                 f"-p {param.name} --batch {extra}")
+                                 f"-p {param.name} --batch {all_extra}")
             elif param.location == ParamLocation.BODY:
                 req_files = [f for f in os.listdir(requests_dir)
                              if f.startswith(f"{i+1:03d}_")] if os.path.isdir(requests_dir) else []
                 if req_files:
                     req_path = os.path.join(requests_dir, req_files[0])
-                    lines.append(f"# sqlmap -r \"{req_path}\" --batch {extra}")
+                    lines.append(f"# sqlmap -r \"{req_path}\" --batch {all_extra}")
                 else:
-                    lines.append(f"# sqlmap -u \"{ep.base_url}\" --data=\"{param.name}=test\" --batch {extra}")
+                    lines.append(f"# sqlmap -u \"{ep.base_url}\" --data=\"{param.name}=test\" --batch {all_extra}")
             lines.append("")
 
         with open(path, "w") as f:

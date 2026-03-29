@@ -289,10 +289,13 @@ def main():
     session_mgr = None
 
     if args.login:
-        if ":" not in args.login:
-            print(f"{C.RED}Error: --login format is username:password{C.RESET}", file=sys.stderr)
-            sys.exit(1)
-        username, password = args.login.split(":", 1)
+        # Support "user:pass" or just "user" (prompts for password)
+        import getpass
+        if ":" in args.login:
+            username, password = args.login.split(":", 1)
+        else:
+            username = args.login
+            password = getpass.getpass(f"Password for {username}: ")
         credentials = {"username": username, "password": password}
 
         session_mgr = SessionManager(client, args.url, credentials)
@@ -304,6 +307,10 @@ def main():
         if session_mgr.auto_login():
             if not args.quiet and not args.json_only:
                 print(f"  {C.GREEN}Login successful — scanning as authenticated user{C.RESET}")
+                # Show the session cookies so user knows what was captured
+                cookies = "; ".join(f"{k}={v}" for k, v in client.session.cookies.get_dict().items())
+                if cookies:
+                    print(f"  {C.DIM}Session cookies: {cookies[:100]}{'...' if len(cookies) > 100 else ''}{C.RESET}")
         else:
             if not args.quiet and not args.json_only:
                 print(f"  {C.YELLOW}Login failed — continuing as unauthenticated{C.RESET}")
@@ -687,9 +694,20 @@ def main():
     # Get tech-aware sqlmap flags
     sqlmap_extra_flags, sqlmap_notes = tech_fp.sqlmap_flags()
 
+    # Build session info for sqlmap commands
+    session_cookie = "; ".join(f"{k}={v}" for k, v in client.session.cookies.get_dict().items())
+    if not session_cookie and args.cookie:
+        session_cookie = args.cookie  # Use manually provided cookie
+
     # Generate output files
-    output_gen = OutputGenerator(findings, output_dir, sqlmap_extra_flags=sqlmap_extra_flags,
-                                 sqlmap_notes=sqlmap_notes)
+    output_gen = OutputGenerator(
+        findings, output_dir,
+        sqlmap_extra_flags=sqlmap_extra_flags,
+        sqlmap_notes=sqlmap_notes,
+        session_cookie=session_cookie or None,
+        user_agent=client.session.headers.get("User-Agent"),
+        proxy=proxy,
+    )
     result = output_gen.generate_all()
 
     # Generate HTML report
