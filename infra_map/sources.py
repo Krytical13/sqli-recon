@@ -607,18 +607,29 @@ class CensysAPI(SourceBase):
         return None
 
     def lookup_ip(self, ip, depth):
-        """Get host details — dns_names, services with TLS certs, ASN."""
+        """Get host details from Censys Platform API v3.
+
+        Response structure (verified against live API):
+          result.resource.dns.names[]           — domain names from forward DNS
+          result.resource.dns.reverse_dns.names[] — reverse DNS hostnames
+          result.resource.autonomous_system     — ASN, org, prefix
+          result.resource.services[]            — port/protocol/tls data
+        """
         resp = self._api_request("GET", f"/v3/global/asset/host/{ip}")
         if resp is None:
             return
 
         try:
-            data = resp.json()
+            data = resp.json().get("result", {}).get("resource", {})
         except (ValueError, TypeError):
             return
 
-        # dns_names — top-level array of associated domain names
-        for name in data.get("dns_names", []):
+        if not data:
+            return
+
+        # dns.names — domains Censys has observed resolving to this IP
+        dns_info = data.get("dns", {})
+        for name in dns_info.get("names", []):
             d = name.strip().lower()
             if d.startswith("*."):
                 d = d[2:]
@@ -626,13 +637,23 @@ class CensysAPI(SourceBase):
                 self.graph.add_node(NodeType.DOMAIN, d, depth=depth + 1, source=self.name)
                 self.graph.add_edge(
                     NodeType.IP, ip, NodeType.DOMAIN, d,
-                    EdgeType.CERT_COVERS, self.name,
+                    EdgeType.SAME_HOST, self.name,
+                )
+
+        # dns.reverse_dns.names — PTR records
+        for name in dns_info.get("reverse_dns", {}).get("names", []):
+            d = name.strip().lower()
+            if d and _is_valid_domain(d):
+                self.graph.add_node(NodeType.DOMAIN, d, depth=depth + 1, source=self.name)
+                self.graph.add_edge(
+                    NodeType.IP, ip, NodeType.DOMAIN, d,
+                    EdgeType.REVERSE_DNS, self.name,
                 )
 
         # autonomous_system
         as_info = data.get("autonomous_system", {})
         asn = str(as_info.get("asn", ""))
-        org = as_info.get("organization", "") or as_info.get("name", "")
+        org = as_info.get("description", "") or as_info.get("name", "")
         if asn and asn != "0":
             self.graph.add_node(NodeType.ASN, asn, depth=depth + 1,
                                 source=self.name, metadata={"org": org})
@@ -649,8 +670,6 @@ class CensysAPI(SourceBase):
             if not tls:
                 continue
             certs = tls.get("certificates", {})
-            # Certificate data may be nested differently across API versions,
-            # try common paths
             self._extract_cert_domains(certs, ip, depth)
 
     def _extract_cert_domains(self, certs, ip, depth):
@@ -701,11 +720,14 @@ class CensysAPI(SourceBase):
                     )
 
     def search_domain(self, domain, depth):
-        """Search for hosts associated with a domain using CQL."""
+        """Search for hosts associated with a domain using CQL.
+
+        Uses the search/query endpoint. Response structure may vary;
+        we try multiple result paths defensively.
+        """
         resp = self._api_request("POST", "/v3/global/search/query", json_body={
-            "query": f"dns_names: {domain}",
+            "query": f"dns.names: {domain}",
             "per_page": 25,
-            "asset_type": "host",
         })
         if resp is None:
             return
@@ -715,8 +737,12 @@ class CensysAPI(SourceBase):
         except (ValueError, TypeError):
             return
 
-        for hit in data.get("hits", data.get("result", {}).get("hits", [])):
-            ip = hit.get("host_id", "") or hit.get("ip", "")
+        # Response may nest hits under result.hits or directly
+        hits = (data.get("result", {}).get("hits", [])
+                or data.get("hits", []))
+
+        for hit in hits:
+            ip = hit.get("ip", "") or hit.get("host_id", "")
             if ip and _is_valid_ip(ip):
                 self.graph.add_node(NodeType.IP, ip, depth=depth + 1, source=self.name)
                 self.graph.add_edge(
@@ -724,7 +750,12 @@ class CensysAPI(SourceBase):
                     EdgeType.RESOLVES_TO, self.name,
                 )
 
-            for name in hit.get("dns_names", []):
+            # Domain names — try dns.names path (matching host lookup structure)
+            dns_names = hit.get("dns", {}).get("names", []) if isinstance(hit.get("dns"), dict) else []
+            if not dns_names:
+                dns_names = hit.get("dns_names", [])
+
+            for name in dns_names:
                 d = name.strip().lower()
                 if d.startswith("*."):
                     d = d[2:]
