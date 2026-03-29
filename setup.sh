@@ -264,24 +264,31 @@ if [ "$ERRORS" -ne 0 ]; then
     exit 1
 fi
 
-# ---- Create wrapper script ----
+# ---- Create wrapper scripts ----
 
-WRAPPER="$SCRIPT_DIR/scan"
-cat > "$WRAPPER" << 'WRAPPER_EOF'
+for tool in scan:sqli_recon map:infra_map; do
+    TOOL_NAME="${tool%%:*}"
+    TOOL_MODULE="${tool##*:}"
+    WRAPPER="$SCRIPT_DIR/$TOOL_NAME"
+    cat > "$WRAPPER" << WRAPPER_EOF
 #!/usr/bin/env bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/.venv/bin/activate"
-exec python -m sqli_recon "$@"
+SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+source "\$SCRIPT_DIR/.venv/bin/activate"
+exec python -m $TOOL_MODULE "\$@"
 WRAPPER_EOF
-chmod +x "$WRAPPER"
+    chmod +x "$WRAPPER"
+done
 
 echo ""
 echo "=== Setup complete ==="
 echo ""
-echo "Usage:"
-echo "  ./scan -u https://target.com                  # Full scan"
-echo "  ./scan -u https://target.com --tor             # Via Tor"
-echo "  ./scan -u https://target.com --quick           # Fast recon only"
-echo "  ./scan -u https://target.com -o ./results      # Custom output dir"
+echo "Tools:"
+echo "  ./scan -u https://target.com              # SQLi surface discovery"
+echo "  ./map example.com                          # Infrastructure mapping"
 echo ""
-echo "Run ./scan --help for all options."
+echo "Examples:"
+echo "  ./scan -u https://target.com --tor         # Scan via Tor"
+echo "  ./map example.com --depth 3 -o ./results   # Deep mapping with output"
+echo "  ./map 93.184.216.34 --tor                  # Map from an IP via Tor"
+echo ""
+echo "Run ./scan --help or ./map --help for all options."

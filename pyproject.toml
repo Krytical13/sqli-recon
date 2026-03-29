@@ -20,6 +20,7 @@ headless = ["playwright>=1.40.0"]
 
 [project.scripts]
 sqli-recon = "sqli_recon.cli:main"
+infra-map = "infra_map.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["sqli_recon*"]
+include = ["sqli_recon*", "infra_map*"]

@@ -10,3 +10,5 @@ tests/tor_data/hidden_service/
 tests/tor_data/tor.log
 tests/scan_results/
 tests/tor_scan_results/
+*.png
+map
