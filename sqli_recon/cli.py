@@ -692,6 +692,15 @@ def main():
                                  sqlmap_notes=sqlmap_notes)
     result = output_gen.generate_all()
 
+    # Generate HTML report
+    from sqli_recon.report import generate_html_report
+    html_path = generate_html_report(
+        findings, output_dir,
+        tech_summary=tech_fp.summary() if tech_fp.detected else None,
+        sqlmap_notes=sqlmap_notes,
+        stats=client.stats,
+    )
+
     # Clear checkpoint — scan completed successfully
     clear_checkpoint(output_dir)
 
@@ -712,6 +721,7 @@ def main():
         print(f"  {C.CYAN}sqlmap URLs:{C.RESET}     {result['urls_file']} ({result['urls_count']} URLs)")
         print(f"  {C.CYAN}Request files:{C.RESET}   {result['requests_dir']}/ ({result['requests_count']} files)")
         print(f"  {C.CYAN}JSON report:{C.RESET}    {result['report_file']}")
+        print(f"  {C.CYAN}HTML report:{C.RESET}    {html_path}")
         print(f"  {C.CYAN}sqlmap commands:{C.RESET} {result['commands_file']}")
 
         # Quick-start hints — show the right command for what was found
