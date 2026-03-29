@@ -118,6 +118,8 @@ examples:
     out = p.add_argument_group("output")
     out.add_argument("-o", "--output", type=str, default=None,
                      help="Output directory (default: ./sqli_recon_output)")
+    out.add_argument("--resume", action="store_true",
+                     help="Resume a previously interrupted scan (requires same -o directory)")
     out.add_argument("--json-only", action="store_true",
                      help="JSON report to stdout only (no files, no colors)")
     out.add_argument("--min-score", type=float, default=0.0,
@@ -308,7 +310,22 @@ def main():
                 print(f"  {C.DIM}Try --cookie with manually obtained session cookies instead{C.RESET}")
 
     all_endpoints = []
+    js_urls = []
     start_time = time.time()
+    resume_phase = None
+
+    # Resume from checkpoint if requested
+    from sqli_recon.checkpoint import save_checkpoint, load_checkpoint, clear_checkpoint
+    if args.resume:
+        ckpt = load_checkpoint(output_dir)
+        if ckpt:
+            resume_phase, all_endpoints, js_urls, ckpt_meta = ckpt
+            if not args.quiet and not args.json_only:
+                print(f"  {C.CYAN}Resuming from phase: {resume_phase} "
+                      f"({len(all_endpoints)} endpoints loaded){C.RESET}")
+        else:
+            if not args.quiet and not args.json_only:
+                print(f"  {C.DIM}No checkpoint found — starting fresh{C.RESET}")
 
     # Get platform-aware scan recommendations
     scan_rec = tech_fp.scan_recommendations()
@@ -329,40 +346,46 @@ def main():
     # ---- Phase 1: Active Crawl ----
     if not args.quiet and not args.json_only:
         log_phase("CRAWL")
-        log_status("Spidering target site...")
+        if resume_phase:
+            log_status(f"Resumed — {len(all_endpoints)} endpoints from checkpoint")
+        else:
+            log_status("Spidering target site...")
 
-    crawler = Crawler(
-        client=client,
-        target_url=args.url,
-        max_depth=crawl_depth,
-        max_pages=args.max_pages,
-        scope=args.scope,
-    )
+    if not resume_phase:
+        crawler = Crawler(
+            client=client,
+            target_url=args.url,
+            max_depth=crawl_depth,
+            max_pages=args.max_pages,
+            scope=args.scope,
+        )
 
-    # Build seed URLs from platform-specific priority endpoints
-    seed_urls = [f"{parsed.scheme}://{parsed.netloc}{path}" for path in priority_paths]
+        seed_urls = [f"{parsed.scheme}://{parsed.netloc}{path}" for path in priority_paths]
 
-    def crawl_progress(done, queued):
+        def crawl_progress(done, queued):
+            if not args.quiet and not args.json_only:
+                print(f"\r  {C.DIM}Pages: {done} crawled, {queued} queued{C.RESET}    ", end="", flush=True)
+
+        endpoints, js_urls = crawler.crawl(progress_callback=crawl_progress, seed_urls=seed_urls)
+        all_endpoints.extend(endpoints)
+
         if not args.quiet and not args.json_only:
-            print(f"\r  {C.DIM}Pages: {done} crawled, {queued} queued{C.RESET}    ", end="", flush=True)
+            forms = sum(1 for e in endpoints if e.source.value == "form")
+            print(f"\r  Found {len(endpoints)} endpoints, {forms} forms, {len(js_urls)} JS files           ")
 
-    endpoints, js_urls = crawler.crawl(progress_callback=crawl_progress, seed_urls=seed_urls)
-    all_endpoints.extend(endpoints)
+        # Save checkpoint after crawl
+        save_checkpoint(output_dir, "crawl_done", all_endpoints, js_urls)
 
     captcha_abort = client.stats["captchas"] >= 5
-
-    if not args.quiet and not args.json_only:
-        forms = sum(1 for e in endpoints if e.source.value == "form")
-        print(f"\r  Found {len(endpoints)} endpoints, {forms} forms, {len(js_urls)} JS files           ")
-        if captcha_abort:
-            print(f"\n  {C.RED}{C.BOLD}CAPTCHA wall hit — crawl aborted early.{C.RESET}")
-            print(f"  {C.YELLOW}Saving partial results. To get full coverage:{C.RESET}")
-            print(f"  {C.YELLOW}  1. Open the site in Tor Browser, solve the CAPTCHA{C.RESET}")
-            print(f"  {C.YELLOW}  2. Copy all cookies from DevTools (Network tab → any request → Cookie header){C.RESET}")
-            print(f"  {C.YELLOW}  3. Re-run: ./scan -u {args.url} --cookie \"paste_cookies_here\"{C.RESET}")
-            if not args.tor:
-                print(f"  {C.YELLOW}  Or try: --headless (real browser can pass JS challenges){C.RESET}")
-            print()
+    if captcha_abort and not args.quiet and not args.json_only:
+        print(f"\n  {C.RED}{C.BOLD}CAPTCHA wall hit — crawl aborted early.{C.RESET}")
+        print(f"  {C.YELLOW}Saving partial results. To get full coverage:{C.RESET}")
+        print(f"  {C.YELLOW}  1. Open the site in Tor Browser, solve the CAPTCHA{C.RESET}")
+        print(f"  {C.YELLOW}  2. Copy all cookies from DevTools (Network tab → any request → Cookie header){C.RESET}")
+        print(f"  {C.YELLOW}  3. Re-run: ./scan -u {args.url} --cookie \"paste_cookies_here\"{C.RESET}")
+        if not args.tor:
+            print(f"  {C.YELLOW}  Or try: --headless (real browser can pass JS challenges){C.RESET}")
+        print()
 
     # ---- Phase 1b: Headless Browser Crawl (optional) ----
     if do_headless:
@@ -654,6 +677,9 @@ def main():
     output_gen = OutputGenerator(findings, output_dir, sqlmap_extra_flags=sqlmap_extra_flags,
                                  sqlmap_notes=sqlmap_notes)
     result = output_gen.generate_all()
+
+    # Clear checkpoint — scan completed successfully
+    clear_checkpoint(output_dir)
 
     # Print terminal summary
     output_gen.print_summary(max_rows=args.top)
