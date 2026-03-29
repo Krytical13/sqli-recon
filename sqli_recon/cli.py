@@ -86,6 +86,8 @@ examples:
                           help="Skip JavaScript file analysis")
     features.add_argument("--headless", action="store_true",
                           help="Also use headless browser for JS-heavy SPAs (requires Playwright)")
+    features.add_argument("--solve-captcha", action="store_true",
+                          help="Open a browser for manual CAPTCHA solving when detected (requires Playwright)")
     features.add_argument("--fuzz-methods", action="store_true",
                           help="Also test HTTP methods (POST/PUT/DELETE) on GET endpoints")
     # Backwards compat: old --fuzz / --brute-api / --skip-js are silently accepted
@@ -359,12 +361,27 @@ def main():
             log_status("Spidering target site...")
 
     if not resume_phase:
+        # Set up interactive CAPTCHA solver if requested
+        captcha_solver = None
+        if args.solve_captcha:
+            try:
+                from sqli_recon.captcha_solver import CaptchaSolver
+                captcha_solver = CaptchaSolver(client, proxy=proxy, verify_ssl=verify_ssl)
+                if not captcha_solver.available:
+                    if not args.quiet and not args.json_only:
+                        print(f"  {C.YELLOW}--solve-captcha requires Playwright. "
+                              f"Install: pip install playwright && playwright install chromium{C.RESET}")
+                    captcha_solver = None
+            except ImportError:
+                pass
+
         crawler = Crawler(
             client=client,
             target_url=args.url,
             max_depth=crawl_depth,
             max_pages=args.max_pages,
             scope=args.scope,
+            captcha_solver=captcha_solver,
         )
 
         seed_urls = [f"{parsed.scheme}://{parsed.netloc}{path}" for path in priority_paths]

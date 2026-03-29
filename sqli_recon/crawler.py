@@ -37,12 +37,14 @@ JS_EXTENSIONS = {".js", ".mjs", ".jsx", ".ts", ".tsx"}
 class Crawler:
     """BFS web crawler that discovers endpoints, forms, parameters, and JS files."""
 
-    def __init__(self, client, target_url, max_depth=3, max_pages=200, scope="domain"):
+    def __init__(self, client, target_url, max_depth=3, max_pages=200, scope="domain",
+                 captcha_solver=None):
         self.client = client
         self.target_url = target_url.rstrip("/")
         self.max_depth = max_depth
         self.max_pages = max_pages
         self.scope = scope
+        self.captcha_solver = captcha_solver  # Optional interactive CAPTCHA solver
 
         self.visited = set()
         self.endpoints = []
@@ -92,13 +94,28 @@ class Crawler:
             if resp is None:
                 continue
 
-            # Skip CAPTCHA challenge pages — not real content
+            # Handle CAPTCHA challenge pages
             if getattr(resp, '_is_captcha', False):
                 captcha_streak += 1
-                if captcha_streak >= 5:
+
+                # Try interactive solver if available (opens browser for user)
+                if self.captcha_solver and self.captcha_solver.available and captcha_streak == 1:
+                    if self.captcha_solver.solve(url):
+                        # Solved — retry this URL with fresh cookies
+                        resp = self.client.get(url)
+                        if resp and not getattr(resp, '_is_captcha', False):
+                            captcha_streak = 0
+                            # Fall through to normal processing
+                        else:
+                            continue
+                    else:
+                        continue
+
+                elif captcha_streak >= 5:
                     log.warning("5 consecutive CAPTCHAs — aborting crawl early")
                     break
-                continue
+                else:
+                    continue
             else:
                 captcha_streak = 0
 
