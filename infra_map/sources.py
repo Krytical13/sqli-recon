@@ -23,15 +23,35 @@ class SourceBase:
         self.session = session
         self.graph = graph
         self.timeout = 30
+        self._consecutive_errors = 0
+        self._disabled = False
+
+    @property
+    def disabled(self):
+        return self._disabled
 
     def _get(self, url, **kwargs):
+        if self._disabled:
+            return None
         kwargs.setdefault("timeout", self.timeout)
         try:
             resp = self.session.get(url, **kwargs)
             if resp.status_code == 200:
+                self._consecutive_errors = 0
                 return resp
+            # Quota exhaustion detection
+            if resp.status_code in (429, 403, 402):
+                self._consecutive_errors += 1
+                if self._consecutive_errors >= 3:
+                    self._disabled = True
+                    log.warning(f"{self.name}: disabled after {self._consecutive_errors} "
+                                f"consecutive {resp.status_code} errors (quota exhausted?)")
             log.debug(f"{self.name}: {url} returned {resp.status_code}")
         except requests.RequestException as e:
+            self._consecutive_errors += 1
+            if self._consecutive_errors >= 5:
+                self._disabled = True
+                log.warning(f"{self.name}: disabled after {self._consecutive_errors} consecutive failures")
             log.debug(f"{self.name}: {url} failed: {e}")
         return None
 
@@ -592,6 +612,8 @@ class CensysAPI(SourceBase):
         self.base = "https://api.platform.censys.io"
 
     def _api_request(self, method, path, params=None, json_body=None):
+        if self._disabled:
+            return None
         url = f"{self.base}{path}"
         headers = {"Authorization": f"Bearer {self.token}"}
         try:
@@ -600,9 +622,19 @@ class CensysAPI(SourceBase):
                 json=json_body, timeout=self.timeout,
             )
             if resp.status_code == 200:
+                self._consecutive_errors = 0
                 return resp
+            if resp.status_code in (429, 403, 402):
+                self._consecutive_errors += 1
+                if self._consecutive_errors >= 3:
+                    self._disabled = True
+                    log.warning(f"{self.name}: disabled — quota exhausted ({resp.status_code})")
             log.debug(f"{self.name}: {url} returned {resp.status_code}")
         except requests.RequestException as e:
+            self._consecutive_errors += 1
+            if self._consecutive_errors >= 5:
+                self._disabled = True
+                log.warning(f"{self.name}: disabled after repeated failures")
             log.debug(f"{self.name}: {url} failed: {e}")
         return None
 
