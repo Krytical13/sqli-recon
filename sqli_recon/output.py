@@ -14,6 +14,31 @@ def _shell_quote(s):
     """Quote a string for safe shell use."""
     return shlex.quote(s)
 
+
+def _get_vuln_types(finding):
+    """Determine which vulnerability types a finding has been confirmed for.
+
+    Returns list of: 'sqli', 'ssti', 'cmdi'. A finding can have multiple
+    if multiple detectors confirmed it.
+    """
+    types = []
+    for reason in finding.reasons:
+        if "SSTI" in reason:
+            if "ssti" not in types:
+                types.append("ssti")
+        elif "Command injection" in reason:
+            if "cmdi" not in types:
+                types.append("cmdi")
+        elif "DB error" in reason:
+            if "sqli" not in types:
+                types.append("sqli")
+
+    # Default to sqli if no specific type confirmed
+    if not types:
+        types.append("sqli")
+
+    return types
+
 log = logging.getLogger(__name__)
 
 
@@ -269,16 +294,21 @@ class OutputGenerator:
             "",
             *[f'{v}' for v in session_vars],
             "" if session_vars else "# (no session)",
-            '# Check sqlmap is available',
+            '# Find tools — check venv paths if not in system PATH',
+            'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"',
+            'for venv_path in "$SCRIPT_DIR/../../.venv/bin" "$SCRIPT_DIR/../.venv/bin"; do',
+            '  [ -d "$venv_path" ] && export PATH="$venv_path:$PATH" && break',
+            'done',
+            '',
+            '# tplmap is a standalone script, not a pip package',
+            'TPLMAP=""',
+            'for tpl_path in "$SCRIPT_DIR/../../tools/tplmap/tplmap.py" "$SCRIPT_DIR/../tools/tplmap/tplmap.py"; do',
+            '  [ -f "$tpl_path" ] && TPLMAP="python $tpl_path" && break',
+            'done',
+            '',
             'if ! command -v sqlmap &>/dev/null; then',
-            '  if [ -f "$(dirname "$0")/../../.venv/bin/sqlmap" ]; then',
-            '    export PATH="$(dirname "$0")/../../.venv/bin:$PATH"',
-            '  elif [ -f "$(dirname "$0")/../.venv/bin/sqlmap" ]; then',
-            '    export PATH="$(dirname "$0")/../.venv/bin:$PATH"',
-            '  else',
-            '    echo "sqlmap not found. Install with: pip install sqlmap"',
-            '    exit 1',
-            '  fi',
+            '  echo "sqlmap not found. Run ./setup.sh to install."',
+            '  exit 1',
             'fi',
             "",
             'DRY_RUN=false',
@@ -341,30 +371,72 @@ class OutputGenerator:
                 ep = finding.endpoint
                 param = finding.parameter
                 confirmed = "CONFIRMED " if finding.score >= 0.90 else ""
-                label = f"{confirmed}[{risk_level}] {ep.method} {ep.base_url} → {param.name}"
 
-                if param.location in (ParamLocation.QUERY, ParamLocation.PATH):
-                    url = self._build_marked_url(finding)
-                    lines.append(f'run_cmd "{label}" sqlmap -u "{url}" --batch {all_extra}')
-                elif param.location == ParamLocation.JSON:
-                    req_files = [f for f in os.listdir(requests_dir)
-                                 if f.startswith(f"{i+1:03d}_")] if os.path.isdir(requests_dir) else []
-                    if req_files:
-                        req_path = os.path.join(requests_dir, req_files[0])
-                        lines.append(f'run_cmd "{label}" sqlmap -r "{req_path}" -p {param.name} --batch {all_extra}')
-                elif param.location == ParamLocation.BODY:
-                    req_files = [f for f in os.listdir(requests_dir)
-                                 if f.startswith(f"{i+1:03d}_")] if os.path.isdir(requests_dir) else []
-                    if req_files:
-                        req_path = os.path.join(requests_dir, req_files[0])
-                        lines.append(f'run_cmd "{label}" sqlmap -r "{req_path}" --batch {all_extra}')
-                elif param.location == ParamLocation.HEADER:
-                    # Header injection — use --header flag
-                    url = ep.base_url
-                    lines.append(f'run_cmd "{label}" sqlmap -u "{url}" '
-                                 f'--header="{param.name}: test*" --batch {all_extra}')
+                # Determine which tools to use based on confirmed findings
+                vuln_types = _get_vuln_types(finding)
+                url = self._build_marked_url(finding)
 
-                cmd_count += 1
+                for vuln_type in vuln_types:
+                    if vuln_type == "ssti":
+                        label = f"{confirmed}[SSTI] {ep.method} {ep.base_url} → {param.name}"
+                        # tplmap for SSTI
+                        if param.location in (ParamLocation.QUERY, ParamLocation.PATH):
+                            lines.append(f'if [ -n "$TPLMAP" ]; then')
+                            lines.append(f'  run_cmd "{label}" $TPLMAP -u "{url}" {session_str}')
+                            lines.append(f'else')
+                            lines.append(f'  echo "# SKIP {label} — tplmap not installed (run ./setup.sh)"')
+                            lines.append(f'fi')
+                        elif param.location in (ParamLocation.BODY, ParamLocation.JSON):
+                            req_files = [f for f in os.listdir(requests_dir)
+                                         if f.startswith(f"{i+1:03d}_")] if os.path.isdir(requests_dir) else []
+                            if req_files:
+                                req_path = os.path.join(requests_dir, req_files[0])
+                                lines.append(f'# SSTI: {label} — test manually with tplmap:')
+                                lines.append(f'# $TPLMAP -u "{ep.base_url}" -d @"{req_path}" {session_str}')
+
+                    elif vuln_type == "cmdi":
+                        label = f"{confirmed}[CmdI] {ep.method} {ep.base_url} → {param.name}"
+                        # commix for command injection
+                        commix_extra = session_str
+                        if param.location in (ParamLocation.QUERY, ParamLocation.PATH):
+                            lines.append(f'if command -v commix &>/dev/null; then')
+                            lines.append(f'  run_cmd "{label}" commix -u "{url}" --batch {commix_extra}')
+                            lines.append(f'else')
+                            lines.append(f'  echo "# SKIP {label} — commix not installed (run ./setup.sh)"')
+                            lines.append(f'fi')
+                        elif param.location in (ParamLocation.BODY, ParamLocation.JSON):
+                            req_files = [f for f in os.listdir(requests_dir)
+                                         if f.startswith(f"{i+1:03d}_")] if os.path.isdir(requests_dir) else []
+                            if req_files:
+                                req_path = os.path.join(requests_dir, req_files[0])
+                                lines.append(f'if command -v commix &>/dev/null; then')
+                                lines.append(f'  run_cmd "{label}" commix -r "{req_path}" -p {param.name} --batch {commix_extra}')
+                                lines.append(f'else')
+                                lines.append(f'  echo "# SKIP {label} — commix not installed"')
+                                lines.append(f'fi')
+
+                    else:  # sqli (default)
+                        label = f"{confirmed}[SQLi] {ep.method} {ep.base_url} → {param.name}"
+                        if param.location in (ParamLocation.QUERY, ParamLocation.PATH):
+                            lines.append(f'run_cmd "{label}" sqlmap -u "{url}" --batch {all_extra}')
+                        elif param.location == ParamLocation.JSON:
+                            req_files = [f for f in os.listdir(requests_dir)
+                                         if f.startswith(f"{i+1:03d}_")] if os.path.isdir(requests_dir) else []
+                            if req_files:
+                                req_path = os.path.join(requests_dir, req_files[0])
+                                lines.append(f'run_cmd "{label}" sqlmap -r "{req_path}" -p {param.name} --batch {all_extra}')
+                        elif param.location == ParamLocation.BODY:
+                            req_files = [f for f in os.listdir(requests_dir)
+                                         if f.startswith(f"{i+1:03d}_")] if os.path.isdir(requests_dir) else []
+                            if req_files:
+                                req_path = os.path.join(requests_dir, req_files[0])
+                                lines.append(f'run_cmd "{label}" sqlmap -r "{req_path}" --batch {all_extra}')
+                        elif param.location == ParamLocation.HEADER:
+                            lines.append(f'run_cmd "{label}" sqlmap -u "{ep.base_url}" '
+                                         f'--header="{param.name}: test*" --batch {all_extra}')
+
+                    cmd_count += 1
+
                 lines.append("")
 
         lines.append(f'echo ""')

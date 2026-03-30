@@ -218,6 +218,22 @@ echo "[+] Installing sqli_recon and dependencies..."
 pip install --upgrade pip -q 2>/dev/null
 pip install -e "$SCRIPT_DIR" -q 2>&1 | tail -1
 
+# ---- Exploitation tools (sqlmap, commix, tplmap) ----
+
+echo "[+] Installing sqlmap..."
+pip install sqlmap -q 2>&1 | tail -1
+
+echo "[+] Installing commix..."
+pip install git+https://github.com/commixproject/commix.git -q 2>&1 | tail -1
+
+echo "[+] Installing tplmap..."
+TPLMAP_DIR="$SCRIPT_DIR/tools/tplmap"
+if [ ! -d "$TPLMAP_DIR" ]; then
+    git clone --depth 1 https://github.com/epinna/tplmap.git "$TPLMAP_DIR" 2>&1 | tail -1
+fi
+# Install tplmap deps (ignore wsgiref build error — Python 2 leftover)
+pip install pyyaml -q 2>/dev/null
+
 # ---- Optional: Playwright ----
 
 if [ "$WITH_HEADLESS" = true ]; then
