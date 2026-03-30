@@ -233,13 +233,21 @@ def main():
                   end="", flush=True)
 
     from infra_map.output import TYPE_COLORS, TYPE_ICONS
-    mapper.run(progress_callback=progress)
+
+    # Run with graceful Ctrl+C handling — saves progress on interrupt
+    interrupted = False
+    try:
+        mapper.run(progress_callback=progress)
+    except KeyboardInterrupt:
+        interrupted = True
+        print(f"\n\n  {C.YELLOW}Interrupted — saving progress...{C.RESET}")
 
     elapsed = time.time() - start_time
 
     if not args.quiet and not args.json_only:
         api_note = f", {mapper._api_calls} API calls used" if mapper._api_calls > 0 else ""
-        print(f"\r  Completed in {elapsed:.1f}s{api_note}{' ' * 30}")
+        status = "Interrupted" if interrupted else "Completed"
+        print(f"\r  {status} in {elapsed:.1f}s{api_note}{' ' * 30}")
 
     # Output
     if args.json_only:
@@ -264,7 +272,7 @@ def main():
     probe_results = {}
     all_domains = sorted(set(n.value for n in graph.nodes_by_type(NodeType.DOMAIN)))
 
-    if (args.probe or args.scan) and all_domains:
+    if (args.probe or args.scan) and all_domains and not interrupted:
         from infra_map.probe import DomainProbe
 
         if not args.quiet and not args.json_only:
