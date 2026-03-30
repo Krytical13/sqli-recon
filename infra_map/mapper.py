@@ -8,6 +8,7 @@ from infra_map.sources import (
     CrtSh, DNSResolver, HackerTarget, WaybackMachine, BGPView, Whois,
     ShodanAPI, CensysAPI,
 )
+from infra_map.probe import CDN_PREFIXES
 
 log = logging.getLogger(__name__)
 
@@ -145,6 +146,12 @@ class Mapper:
         ip = node.value
         depth = node.depth
 
+        # Skip CDN IPs — expanding them finds hundreds of unrelated domains
+        if _is_cdn_ip(ip):
+            node.metadata["cdn"] = True
+            log.debug(f"Skipping CDN IP {ip}")
+            return
+
         # Reverse DNS
         self.dns.reverse_dns(ip, depth)
         self._wait()
@@ -177,10 +184,35 @@ class Mapper:
         self.crtsh.search_org(org, depth)
         self._wait()
 
+    # ASNs belonging to CDN/cloud providers — expanding these is pure noise
+    CDN_ASNS = {
+        "13335",   # Cloudflare
+        "20940",   # Akamai
+        "16509",   # Amazon/AWS
+        "15169",   # Google
+        "8075",    # Microsoft/Azure
+        "54113",   # Fastly
+        "30148",   # Sucuri
+        "19551",   # Incapsula
+    }
+
     def _expand_asn(self, node):
         asn = node.value
         depth = node.depth
 
+        if asn in self.CDN_ASNS:
+            node.metadata["cdn"] = True
+            log.debug(f"Skipping CDN ASN {asn}")
+            return
+
         # Get all prefixes for this ASN
         self.bgpview.lookup_asn_prefixes(asn, depth)
         self._wait()
+
+
+def _is_cdn_ip(ip):
+    """Check if an IP belongs to a known CDN. Expanding these floods the graph with noise."""
+    for prefix in CDN_PREFIXES:
+        if ip.startswith(prefix):
+            return True
+    return False
