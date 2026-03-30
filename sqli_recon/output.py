@@ -41,11 +41,12 @@ def colorize_score(score):
 
 
 def colorize_risk(risk):
-    if risk == "HIGH":
-        return f"{C.RED}{C.BOLD}{risk}{C.RESET}"
-    elif risk == "MEDIUM":
-        return f"{C.YELLOW}{risk}{C.RESET}"
-    return f"{C.DIM}{risk}{C.RESET}"
+    val = risk.value if hasattr(risk, 'value') else str(risk)
+    if val == "HIGH":
+        return f"{C.RED}{C.BOLD}{val}{C.RESET}"
+    elif val == "MEDIUM":
+        return f"{C.YELLOW}{val}{C.RESET}"
+    return f"{C.DIM}{val}{C.RESET}"
 
 
 # ---- Output generators ----
@@ -209,7 +210,7 @@ class OutputGenerator:
             "findings": [
                 {
                     "score": round(f.score, 3),
-                    "risk": f.risk_level,
+                    "risk": f.risk_level.value if hasattr(f.risk_level, 'value') else f.risk_level,
                     "method": f.endpoint.method,
                     "url": f.endpoint.url,
                     "base_url": f.endpoint.base_url,
@@ -264,9 +265,13 @@ class OutputGenerator:
             "# Runs sqlmap against all discovered findings, HIGH risk first.",
             "# Session cookies and platform-specific flags are baked in.",
             "#",
-            "# Usage: ./run_sqlmap.sh           (run all)",
-            "#        ./run_sqlmap.sh --high     (HIGH only)",
-            "#        ./run_sqlmap.sh --dry-run  (show commands without running)",
+            "# Usage: ./run_sqlmap.sh                  (run all)",
+            "#        ./run_sqlmap.sh --high              (HIGH only)",
+            "#        ./run_sqlmap.sh --sqli              (SQLi only)",
+            "#        ./run_sqlmap.sh --ssti              (SSTI only)",
+            "#        ./run_sqlmap.sh --cmdi              (command injection only)",
+            "#        ./run_sqlmap.sh --dry-run           (show commands without running)",
+            "#   Combine: ./run_sqlmap.sh --high --sqli --dry-run",
             "",
             *[f'{v}' for v in session_vars],
             "" if session_vars else "# (no session)",
@@ -289,10 +294,17 @@ class OutputGenerator:
             "",
             'DRY_RUN=false',
             'HIGH_ONLY=false',
+            'RUN_SQLI=false',
+            'RUN_SSTI=false',
+            'RUN_CMDI=false',
+            'TYPE_FILTER=false',
             'for arg in "$@"; do',
             '  case "$arg" in',
             '    --dry-run) DRY_RUN=true ;;',
             '    --high) HIGH_ONLY=true ;;',
+            '    --sqli) RUN_SQLI=true; TYPE_FILTER=true ;;',
+            '    --ssti) RUN_SSTI=true; TYPE_FILTER=true ;;',
+            '    --cmdi) RUN_CMDI=true; TYPE_FILTER=true ;;',
             '  esac',
             'done',
             "",
@@ -345,6 +357,11 @@ class OutputGenerator:
                     is_body_param = param.location in (ParamLocation.BODY, ParamLocation.JSON)
                     p_flag = f" -p {param.name}" if param.location == ParamLocation.JSON else ""
 
+                    # Type filter: map VulnType to shell variable
+                    type_var = {VulnType.SQLI: "RUN_SQLI", VulnType.SSTI: "RUN_SSTI",
+                                VulnType.CMDI: "RUN_CMDI"}.get(vuln_type, "RUN_SQLI")
+                    lines.append(f'if [ "$TYPE_FILTER" = false ] || [ "${type_var}" = true ]; then')
+
                     if vuln_type == VulnType.SSTI:
                         label = f"{confirmed}[SSTI] {ep.method} {ep.base_url} → {param.name}"
                         if is_url_param:
@@ -382,6 +399,7 @@ class OutputGenerator:
                             lines.append(f'run_cmd "{label}" sqlmap -u "{ep.base_url}" '
                                          f'--header="{param.name}: test*" --batch {all_extra}')
 
+                    lines.append('fi')  # Close type filter guard
                     cmd_count += 1
 
                 lines.append("")
