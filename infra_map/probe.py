@@ -100,6 +100,28 @@ class DomainProbe:
         if progress_callback:
             progress_callback(len(domains), len(domains))
 
+        # Wildcard DNS detection: if many subdomains resolve to the same IP,
+        # it's likely a DNS wildcard catch-all (not real individual sites)
+        ip_counts = {}
+        for d, r in results.items():
+            if r["ip"]:
+                ip_counts.setdefault(r["ip"], []).append(d)
+
+        for ip, ip_domains in ip_counts.items():
+            # If 10+ subdomains of the same parent resolve to one IP → wildcard
+            if len(ip_domains) >= 10:
+                parents = set()
+                for d in ip_domains:
+                    parts = d.split(".")
+                    if len(parts) >= 3:
+                        parents.add(".".join(parts[-2:]))
+                for parent in parents:
+                    children = [d for d in ip_domains if d.endswith(f".{parent}")]
+                    if len(children) >= 10:
+                        for d in children:
+                            results[d]["wildcard"] = True
+                            results[d]["scannable"] = False
+
         return results
 
     def _probe(self, domain):
@@ -109,6 +131,7 @@ class DomainProbe:
             "http_code": 0,
             "cdn": None,
             "parked": False,
+            "wildcard": False,
             "tech": [],
             "title": "",
             "redirect": "",

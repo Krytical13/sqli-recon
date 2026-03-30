@@ -286,6 +286,7 @@ def main():
         parked = [d for d, r in probe_results.items() if r["parked"]]
         dead = [d for d, r in probe_results.items() if r["status"] in ("dns_failed", "http_failed")]
         scannable = [d for d, r in probe_results.items() if r["scannable"]]
+        wildcard = [d for d, r in probe_results.items() if r.get("wildcard")]
 
         # Shared hosting detection — group by IP
         ip_to_domains = {}
@@ -299,6 +300,7 @@ def main():
                   f"{C.CYAN}{len(cdn_domains)} CDN-proxied{C.RESET}, "
                   f"{C.YELLOW}{len(parked)} parked{C.RESET}, "
                   f"{C.DIM}{len(dead)} dead{C.RESET}, "
+                  f"{C.DIM}{len(wildcard)} wildcard{C.RESET}, "
                   f"{C.GREEN}{len(scannable)} scannable{C.RESET}           ")
 
             if shared_ips:
