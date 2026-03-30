@@ -533,11 +533,12 @@ def main():
 
     # ---- Phase 4: Hidden Parameter Fuzzing ----
     if do_fuzz:
+        fuzz_budget = 600 if tor_mode else 300  # 10 min Tor, 5 min direct
         if not args.quiet and not args.json_only:
             log_phase("PARAM FUZZ")
-            log_status(f"Fuzzing {len(all_endpoints)} endpoints for hidden parameters...")
+            log_status(f"Fuzzing endpoints for hidden parameters (budget: {fuzz_budget // 60}min)...")
 
-        finder = ParamFinder(client)
+        finder = ParamFinder(client, max_time=fuzz_budget)
 
         def fuzz_progress(done, total):
             if not args.quiet and not args.json_only:
