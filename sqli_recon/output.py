@@ -342,95 +342,66 @@ class OutputGenerator:
 
         # Generate commands sorted by risk: HIGH first, then MEDIUM
         cmd_count = 0
+        medium_guard_added = False
+        dir_listing = os.listdir(requests_dir) if os.path.isdir(requests_dir) else []
+
         for risk_level in ("HIGH", "MEDIUM"):
             for i, finding in enumerate(self.findings):
                 if finding.risk_level != risk_level:
                     continue
 
-                ep = finding.endpoint
-                param = finding.parameter
-                label = f"[{risk_level}] {ep.method} {ep.base_url} → {param.name} ({param.location.value})"
-
-                if risk_level == "MEDIUM":
+                if risk_level == "MEDIUM" and not medium_guard_added:
                     lines.append('if [ "$HIGH_ONLY" = true ]; then exit 0; fi')
                     lines.append("")
-                    # Only add this guard once
-                    for j, f2 in enumerate(self.findings):
-                        if f2.risk_level == "MEDIUM":
-                            if j == i:
-                                break
-                    # Remove the duplicate guard if we already added it
-                    if lines[-2] == 'if [ "$HIGH_ONLY" = true ]; then exit 0; fi':
-                        pass  # Keep it
-                    break  # Only add the guard once, then fall through
-
-            for i, finding in enumerate(self.findings):
-                if finding.risk_level != risk_level:
-                    continue
+                    medium_guard_added = True
 
                 ep = finding.endpoint
                 param = finding.parameter
                 confirmed = "CONFIRMED " if finding.score >= 0.90 else ""
 
-                # Determine which tools to use based on confirmed findings
                 vuln_types = _get_vuln_types(finding)
                 url = self._build_marked_url(finding)
+                req_files = [f for f in dir_listing if f.startswith(f"{i+1:03d}_")]
+                req_path = os.path.join(requests_dir, req_files[0]) if req_files else None
 
                 for vuln_type in vuln_types:
+                    is_url_param = param.location in (ParamLocation.QUERY, ParamLocation.PATH)
+                    is_body_param = param.location in (ParamLocation.BODY, ParamLocation.JSON)
+                    p_flag = f" -p {param.name}" if param.location == ParamLocation.JSON else ""
+
                     if vuln_type == "ssti":
                         label = f"{confirmed}[SSTI] {ep.method} {ep.base_url} → {param.name}"
-                        # tplmap for SSTI
-                        if param.location in (ParamLocation.QUERY, ParamLocation.PATH):
+                        if is_url_param:
                             lines.append(f'if [ -n "$TPLMAP" ]; then')
                             lines.append(f'  run_cmd "{label}" $TPLMAP -u "{url}" {session_str}')
                             lines.append(f'else')
                             lines.append(f'  echo "# SKIP {label} — tplmap not installed (run ./setup.sh)"')
                             lines.append(f'fi')
-                        elif param.location in (ParamLocation.BODY, ParamLocation.JSON):
-                            req_files = [f for f in os.listdir(requests_dir)
-                                         if f.startswith(f"{i+1:03d}_")] if os.path.isdir(requests_dir) else []
-                            if req_files:
-                                req_path = os.path.join(requests_dir, req_files[0])
-                                lines.append(f'# SSTI: {label} — test manually with tplmap:')
-                                lines.append(f'# $TPLMAP -u "{ep.base_url}" -d @"{req_path}" {session_str}')
+                        elif is_body_param and req_path:
+                            lines.append(f'# SSTI: {label} — test manually with tplmap:')
+                            lines.append(f'# $TPLMAP -u "{ep.base_url}" -d @"{req_path}" {session_str}')
 
                     elif vuln_type == "cmdi":
                         label = f"{confirmed}[CmdI] {ep.method} {ep.base_url} → {param.name}"
-                        # commix for command injection
-                        commix_extra = session_str
-                        if param.location in (ParamLocation.QUERY, ParamLocation.PATH):
+                        if is_url_param:
                             lines.append(f'if command -v commix &>/dev/null; then')
-                            lines.append(f'  run_cmd "{label}" commix -u "{url}" --batch {commix_extra}')
+                            lines.append(f'  run_cmd "{label}" commix -u "{url}" --batch {session_str}')
                             lines.append(f'else')
                             lines.append(f'  echo "# SKIP {label} — commix not installed (run ./setup.sh)"')
                             lines.append(f'fi')
-                        elif param.location in (ParamLocation.BODY, ParamLocation.JSON):
-                            req_files = [f for f in os.listdir(requests_dir)
-                                         if f.startswith(f"{i+1:03d}_")] if os.path.isdir(requests_dir) else []
-                            if req_files:
-                                req_path = os.path.join(requests_dir, req_files[0])
-                                lines.append(f'if command -v commix &>/dev/null; then')
-                                lines.append(f'  run_cmd "{label}" commix -r "{req_path}" -p {param.name} --batch {commix_extra}')
-                                lines.append(f'else')
-                                lines.append(f'  echo "# SKIP {label} — commix not installed"')
-                                lines.append(f'fi')
+                        elif is_body_param and req_path:
+                            lines.append(f'if command -v commix &>/dev/null; then')
+                            lines.append(f'  run_cmd "{label}" commix -r "{req_path}"{p_flag} --batch {session_str}')
+                            lines.append(f'else')
+                            lines.append(f'  echo "# SKIP {label} — commix not installed"')
+                            lines.append(f'fi')
 
                     else:  # sqli (default)
                         label = f"{confirmed}[SQLi] {ep.method} {ep.base_url} → {param.name}"
-                        if param.location in (ParamLocation.QUERY, ParamLocation.PATH):
+                        if is_url_param:
                             lines.append(f'run_cmd "{label}" sqlmap -u "{url}" --batch {all_extra}')
-                        elif param.location == ParamLocation.JSON:
-                            req_files = [f for f in os.listdir(requests_dir)
-                                         if f.startswith(f"{i+1:03d}_")] if os.path.isdir(requests_dir) else []
-                            if req_files:
-                                req_path = os.path.join(requests_dir, req_files[0])
-                                lines.append(f'run_cmd "{label}" sqlmap -r "{req_path}" -p {param.name} --batch {all_extra}')
-                        elif param.location == ParamLocation.BODY:
-                            req_files = [f for f in os.listdir(requests_dir)
-                                         if f.startswith(f"{i+1:03d}_")] if os.path.isdir(requests_dir) else []
-                            if req_files:
-                                req_path = os.path.join(requests_dir, req_files[0])
-                                lines.append(f'run_cmd "{label}" sqlmap -r "{req_path}" --batch {all_extra}')
+                        elif is_body_param and req_path:
+                            lines.append(f'run_cmd "{label}" sqlmap -r "{req_path}"{p_flag} --batch {all_extra}')
                         elif param.location == ParamLocation.HEADER:
                             lines.append(f'run_cmd "{label}" sqlmap -u "{ep.base_url}" '
                                          f'--header="{param.name}: test*" --batch {all_extra}')

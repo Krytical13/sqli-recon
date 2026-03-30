@@ -128,8 +128,6 @@ SSTI_PROBES = [
     ("{{config}}", "<Config"),
     # Twig specific
     ("{{7*'7'}}", "7777777"),
-    # Freemarker
-    ("${7*7}", "49"),
 ]
 
 
@@ -198,19 +196,12 @@ class SSTIDetector:
 # Command injection probes — each checks for a known output pattern.
 # These are safe: they run read-only commands that every OS has.
 CMDI_PROBES = [
-    # Time-based: if response is delayed, the command executed
-    # (we check response time, not output)
-
     # Output-based: inject a command whose output we can recognize
-    # Pipe/semicolon/backtick variants for different contexts
     ("; echo sqli_recon_cmdi_test", "sqli_recon_cmdi_test"),
     ("| echo sqli_recon_cmdi_test", "sqli_recon_cmdi_test"),
     ("` echo sqli_recon_cmdi_test`", "sqli_recon_cmdi_test"),
     ("$(echo sqli_recon_cmdi_test)", "sqli_recon_cmdi_test"),
-
-    # Windows variants
-    ("& echo sqli_recon_cmdi_test", "sqli_recon_cmdi_test"),
-    ("| echo sqli_recon_cmdi_test", "sqli_recon_cmdi_test"),
+    ("& echo sqli_recon_cmdi_test", "sqli_recon_cmdi_test"),  # Windows
 ]
 
 # Time-based: sleep command — if response takes >5s longer than baseline, command ran
@@ -290,6 +281,9 @@ class CommandInjectionDetector:
 
 def _send_probe(client, endpoint, param, value):
     """Send a probe value to a specific parameter. Returns response or None."""
+    from sqli_recon.models import _placeholder_value
+    from urllib.parse import urlunparse
+
     try:
         if param.location == ParamLocation.QUERY:
             parsed = urlparse(endpoint.url)
@@ -302,7 +296,7 @@ def _send_probe(client, endpoint, param, value):
             data = {}
             for p in endpoint.parameters:
                 if p.location == ParamLocation.BODY:
-                    data[p.name] = p.value or "test"
+                    data[p.name] = _placeholder_value(p)
             data[param.name] = value
             return client.post(endpoint.base_url, data=data)
 
@@ -310,17 +304,15 @@ def _send_probe(client, endpoint, param, value):
             body = {}
             for p in endpoint.parameters:
                 if p.location == ParamLocation.JSON:
-                    body[p.name] = p.value or "test"
+                    body[p.name] = _placeholder_value(p)
             body[param.name] = value
             return client.post(endpoint.base_url, json=body,
                                headers={"Content-Type": "application/json"})
 
         elif param.location == ParamLocation.PATH:
-            url = endpoint.url
-            if param.value and param.value in urlparse(url).path:
-                parsed = urlparse(url)
+            if param.value and param.value in urlparse(endpoint.url).path:
+                parsed = urlparse(endpoint.url)
                 new_path = parsed.path.replace(param.value, value, 1)
-                from urllib.parse import urlunparse
                 probe_url = urlunparse((parsed.scheme, parsed.netloc, new_path,
                                         parsed.params, parsed.query, ""))
                 return client.get(probe_url)

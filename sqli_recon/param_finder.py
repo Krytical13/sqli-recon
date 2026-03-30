@@ -213,9 +213,7 @@ class ResponseSignature:
         self.status_code = response.status_code
         self.content_length = len(response.content)
         self.content_hash = hashlib.md5(response.content).hexdigest()
-        text = response.text
-        self.line_count = text.count("\n")
-        self.word_count = len(text.split())
+        self.line_count = response.text.count("\n")
         self.content_type = response.headers.get("Content-Type", "")
 
     def is_similar(self, other, length_threshold=0.05):

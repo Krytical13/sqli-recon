@@ -108,28 +108,6 @@ class Finding:
             return "MEDIUM"
         return "LOW"
 
-    def sqlmap_url(self) -> str:
-        """Generate a sqlmap-compatible URL with injection marker."""
-        parsed = urlparse(self.endpoint.url)
-        if self.parameter.location == ParamLocation.QUERY:
-            qs = parse_qs(parsed.query, keep_blank_values=True)
-            parts = []
-            for key, values in qs.items():
-                val = values[0] if values else ""
-                if key == self.parameter.name:
-                    val = val + "*" if val else "*"
-                parts.append(f"{key}={val}")
-            # If the param wasn't in the original query string, add it
-            if self.parameter.name not in qs:
-                parts.append(f"{self.parameter.name}=*")
-            new_query = "&".join(parts)
-            return urlunparse((parsed.scheme, parsed.netloc, parsed.path,
-                               parsed.params, new_query, parsed.fragment))
-        elif self.parameter.location == ParamLocation.PATH:
-            # Mark the path segment with *
-            return self.endpoint.url  # Caller handles path marking
-        return self.endpoint.url
-
     def sqlmap_request(self) -> str:
         """Generate a raw HTTP request for sqlmap -r.
 
