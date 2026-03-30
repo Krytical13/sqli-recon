@@ -24,6 +24,18 @@ def _placeholder_value(param):
     return "test"
 
 
+class VulnType(str, Enum):
+    SQLI = "sqli"
+    SSTI = "ssti"
+    CMDI = "cmdi"
+
+
+class RiskLevel(str, Enum):
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
 class ParamLocation(str, Enum):
     QUERY = "query"
     BODY = "body"
@@ -99,14 +111,31 @@ class Finding:
     parameter: Parameter
     score: float = 0.0
     reasons: List[str] = field(default_factory=list)
+    confirmed_types: set = field(default_factory=set)  # Set of VulnType values
 
     @property
     def risk_level(self) -> str:
         if self.score >= 0.7:
-            return "HIGH"
+            return RiskLevel.HIGH
         elif self.score >= 0.4:
-            return "MEDIUM"
-        return "LOW"
+            return RiskLevel.MEDIUM
+        return RiskLevel.LOW
+
+    @property
+    def vuln_types(self):
+        """Return vuln types — from structured confirmed_types, or infer from reasons."""
+        if self.confirmed_types:
+            return list(self.confirmed_types)
+        # Fallback: infer from reason strings (backwards compat)
+        types = []
+        for reason in self.reasons:
+            if "SSTI" in reason and VulnType.SSTI not in types:
+                types.append(VulnType.SSTI)
+            elif "Command injection" in reason and VulnType.CMDI not in types:
+                types.append(VulnType.CMDI)
+            elif "DB error" in reason and VulnType.SQLI not in types:
+                types.append(VulnType.SQLI)
+        return types if types else [VulnType.SQLI]
 
     def sqlmap_request(self) -> str:
         """Generate a raw HTTP request for sqlmap -r.

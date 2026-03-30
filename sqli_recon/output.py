@@ -7,37 +7,13 @@ import logging
 import shlex
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
-from sqli_recon.models import Finding, ParamLocation
+from sqli_recon.models import Finding, ParamLocation, VulnType, RiskLevel
 
 
 def _shell_quote(s):
     """Quote a string for safe shell use."""
     return shlex.quote(s)
 
-
-def _get_vuln_types(finding):
-    """Determine which vulnerability types a finding has been confirmed for.
-
-    Returns list of: 'sqli', 'ssti', 'cmdi'. A finding can have multiple
-    if multiple detectors confirmed it.
-    """
-    types = []
-    for reason in finding.reasons:
-        if "SSTI" in reason:
-            if "ssti" not in types:
-                types.append("ssti")
-        elif "Command injection" in reason:
-            if "cmdi" not in types:
-                types.append("cmdi")
-        elif "DB error" in reason:
-            if "sqli" not in types:
-                types.append("sqli")
-
-    # Default to sqli if no specific type confirmed
-    if not types:
-        types.append("sqli")
-
-    return types
 
 log = logging.getLogger(__name__)
 
@@ -359,7 +335,7 @@ class OutputGenerator:
                 param = finding.parameter
                 confirmed = "CONFIRMED " if finding.score >= 0.90 else ""
 
-                vuln_types = _get_vuln_types(finding)
+                vuln_types = finding.vuln_types
                 url = self._build_marked_url(finding)
                 req_files = [f for f in dir_listing if f.startswith(f"{i+1:03d}_")]
                 req_path = os.path.join(requests_dir, req_files[0]) if req_files else None
@@ -369,7 +345,7 @@ class OutputGenerator:
                     is_body_param = param.location in (ParamLocation.BODY, ParamLocation.JSON)
                     p_flag = f" -p {param.name}" if param.location == ParamLocation.JSON else ""
 
-                    if vuln_type == "ssti":
+                    if vuln_type == VulnType.SSTI:
                         label = f"{confirmed}[SSTI] {ep.method} {ep.base_url} → {param.name}"
                         if is_url_param:
                             lines.append(f'if [ -n "$TPLMAP" ]; then')
@@ -381,7 +357,7 @@ class OutputGenerator:
                             lines.append(f'# SSTI: {label} — test manually with tplmap:')
                             lines.append(f'# $TPLMAP -u "{ep.base_url}" -d @"{req_path}" {session_str}')
 
-                    elif vuln_type == "cmdi":
+                    elif vuln_type == VulnType.CMDI:
                         label = f"{confirmed}[CmdI] {ep.method} {ep.base_url} → {param.name}"
                         if is_url_param:
                             lines.append(f'if command -v commix &>/dev/null; then')

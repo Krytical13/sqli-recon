@@ -5,9 +5,56 @@ import json
 import logging
 from urllib.parse import urlparse, urljoin, urlencode, parse_qs
 
-from sqli_recon.models import Endpoint, Parameter, ParamLocation, Source
+from sqli_recon.models import Endpoint, Parameter, ParamLocation, Source, VulnType
 
 log = logging.getLogger(__name__)
+
+
+def _scan_findings(findings, test_fn, min_score=0.3, threaded=False,
+                   max_workers=3, progress_callback=None):
+    """Shared scan loop for all detectors.
+
+    Filters by min_score, deduplicates by (base_url, method, param_name),
+    calls test_fn(finding) for each, collects (finding, result) tuples.
+    """
+    candidates = [f for f in findings if f.score >= min_score]
+
+    tested = set()
+    unique = []
+    for f in candidates:
+        key = (f.endpoint.base_url, f.endpoint.method, f.parameter.name)
+        if key not in tested:
+            tested.add(key)
+            unique.append(f)
+
+    confirmed = []
+    done = [0]
+
+    def _run_one(finding):
+        result = test_fn(finding)
+        done[0] += 1
+        if progress_callback and done[0] % 3 == 0:
+            progress_callback(done[0], len(unique))
+        return (finding, result) if result else None
+
+    if threaded:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_run_one, f): f for f in unique}
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    confirmed.append(result)
+    else:
+        for f in unique:
+            result = _run_one(f)
+            if result:
+                confirmed.append(result)
+
+    if progress_callback:
+        progress_callback(len(unique), len(unique))
+
+    return confirmed
 
 
 # ============================================================
@@ -64,44 +111,9 @@ class ErrorDetector:
         self.client = client
 
     def test_findings(self, findings, min_score=0.3, max_workers=3, progress_callback=None):
-        """
-        Test high-scoring findings for error-based confirmation.
-        Returns list of (finding, db_type) tuples for confirmed injectable params.
-        """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        candidates = [f for f in findings if f.score >= min_score]
-
-        # Deduplicate — don't test the same endpoint+param twice
-        tested = set()
-        unique_candidates = []
-        for f in candidates:
-            key = (f.endpoint.base_url, f.endpoint.method, f.parameter.name)
-            if key not in tested:
-                tested.add(key)
-                unique_candidates.append(f)
-
-        confirmed = []
-        done = [0]
-
-        def _test_one(finding):
-            db_type = self._test_param(finding)
-            done[0] += 1
-            if progress_callback and done[0] % 3 == 0:
-                progress_callback(done[0], len(unique_candidates))
-            return (finding, db_type) if db_type else None
-
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {pool.submit(_test_one, f): f for f in unique_candidates}
-            for future in as_completed(futures):
-                result = future.result()
-                if result:
-                    confirmed.append(result)
-
-        if progress_callback:
-            progress_callback(len(unique_candidates), len(unique_candidates))
-
-        return confirmed
+        return _scan_findings(findings, self._test_param, min_score=min_score,
+                              threaded=True, max_workers=max_workers,
+                              progress_callback=progress_callback)
 
     def _test_param(self, finding):
         """Send a single quote and check for DB errors. Returns DB type or None."""
@@ -143,26 +155,8 @@ class SSTIDetector:
         self.client = client
 
     def test_findings(self, findings, min_score=0.2, progress_callback=None):
-        """Test findings for SSTI. Returns list of (finding, engine_hint)."""
-        confirmed = []
-        tested = set()
-
-        candidates = [f for f in findings if f.score >= min_score]
-
-        for i, finding in enumerate(candidates):
-            if progress_callback and (i + 1) % 5 == 0:
-                progress_callback(i + 1, len(candidates))
-
-            key = (finding.endpoint.base_url, finding.endpoint.method, finding.parameter.name)
-            if key in tested:
-                continue
-            tested.add(key)
-
-            result = self._test_param(finding)
-            if result:
-                confirmed.append((finding, result))
-
-        return confirmed
+        return _scan_findings(findings, self._test_param, min_score=min_score,
+                              progress_callback=progress_callback)
 
     def _test_param(self, finding):
         """Send SSTI probes to a parameter. Returns engine hint or None."""
@@ -227,26 +221,8 @@ class CommandInjectionDetector:
         self.client = client
 
     def test_findings(self, findings, min_score=0.2, progress_callback=None):
-        """Test findings for command injection. Returns list of (finding, method)."""
-        confirmed = []
-        tested = set()
-
-        candidates = [f for f in findings if f.score >= min_score]
-
-        for i, finding in enumerate(candidates):
-            if progress_callback and (i + 1) % 5 == 0:
-                progress_callback(i + 1, len(candidates))
-
-            key = (finding.endpoint.base_url, finding.endpoint.method, finding.parameter.name)
-            if key in tested:
-                continue
-            tested.add(key)
-
-            result = self._test_param(finding)
-            if result:
-                confirmed.append((finding, result))
-
-        return confirmed
+        return _scan_findings(findings, self._test_param, min_score=min_score,
+                              progress_callback=progress_callback)
 
     def _test_param(self, finding):
         """Send command injection probes. Returns detection method or None."""

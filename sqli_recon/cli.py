@@ -644,22 +644,23 @@ def main():
 
         confirmed = detector.test_findings(findings, min_score=0.3, progress_callback=error_progress)
 
-    if confirmed:
-        # Promote confirmed findings to HIGH with DB type info
-        confirmed_keys = {}
-        for finding, db_type in confirmed:
-            key = (finding.endpoint.base_url, finding.parameter.name)
-            confirmed_keys[key] = db_type
+    from sqli_recon.models import VulnType
 
+    def _promote(confirmed_list, vuln_type, score_threshold, reason_template):
+        """Promote confirmed findings — set score, add reason, tag vuln type."""
+        if not confirmed_list:
+            return
+        keys = {}
+        for finding, detail in confirmed_list:
+            keys[(finding.endpoint.base_url, finding.parameter.name)] = detail
         for f in findings:
             key = (f.endpoint.base_url, f.parameter.name)
-            if key in confirmed_keys:
-                db_type = confirmed_keys[key]
-                f.score = max(f.score, 0.90)
-                f.reasons.insert(0, f"CONFIRMED: DB error detected ({db_type}) — injectable")
+            if key in keys:
+                f.score = max(f.score, score_threshold)
+                f.reasons.insert(0, reason_template.format(detail=keys[key]))
+                f.confirmed_types.add(vuln_type)
 
-        # Re-sort after score changes
-        findings.sort(key=lambda f: (-f.score, f.parameter.name))
+    _promote(confirmed, VulnType.SQLI, 0.90, "CONFIRMED: DB error detected ({detail}) — injectable")
 
     # ---- Phase 9b: SSTI Detection ----
     ssti_confirmed = []
@@ -672,16 +673,9 @@ def main():
             log_phase("SSTI DETECT")
             log_status("Probing for Server-Side Template Injection...")
 
-        ssti = SSTIDetector(client)
-        ssti_confirmed = ssti.test_findings(findings, min_score=0.2)
-
-        if ssti_confirmed:
-            for finding, engine in ssti_confirmed:
-                key = (finding.endpoint.base_url, finding.parameter.name)
-                for f in findings:
-                    if (f.endpoint.base_url, f.parameter.name) == key:
-                        f.score = max(f.score, 0.95)
-                        f.reasons.insert(0, f"CONFIRMED: SSTI detected ({engine}) — code execution possible")
+        ssti_confirmed = SSTIDetector(client).test_findings(findings, min_score=0.2)
+        _promote(ssti_confirmed, VulnType.SSTI, 0.95,
+                 "CONFIRMED: SSTI detected ({detail}) — code execution possible")
 
         if not args.quiet and not args.json_only:
             if ssti_confirmed:
@@ -694,16 +688,9 @@ def main():
             log_phase("CMDI DETECT")
             log_status("Probing for OS command injection...")
 
-        cmdi = CommandInjectionDetector(client)
-        cmdi_confirmed = cmdi.test_findings(findings, min_score=0.2)
-
-        if cmdi_confirmed:
-            for finding, method in cmdi_confirmed:
-                key = (finding.endpoint.base_url, finding.parameter.name)
-                for f in findings:
-                    if (f.endpoint.base_url, f.parameter.name) == key:
-                        f.score = max(f.score, 0.95)
-                        f.reasons.insert(0, f"CONFIRMED: Command injection ({method}) — RCE possible")
+        cmdi_confirmed = CommandInjectionDetector(client).test_findings(findings, min_score=0.2)
+        _promote(cmdi_confirmed, VulnType.CMDI, 0.95,
+                 "CONFIRMED: Command injection ({detail}) — RCE possible")
 
         if not args.quiet and not args.json_only:
             if cmdi_confirmed:
