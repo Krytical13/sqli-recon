@@ -63,6 +63,10 @@ optional API sources (keys in ~/.config/infra_map/keys.conf):
 
     p.add_argument("--no-whois", action="store_true", help="Skip WHOIS lookups")
     p.add_argument("--no-wayback", action="store_true", help="Skip Wayback Machine")
+    p.add_argument("--probe", action="store_true",
+                   help="Live-probe all discovered domains (HTTP status, CDN detection, tech fingerprint)")
+    p.add_argument("--scan", action="store_true",
+                   help="Auto-feed live non-CDN domains into sqli_recon scanner after mapping")
 
     net = p.add_argument_group("network")
     net.add_argument("--tor", action="store_true",
@@ -256,7 +260,69 @@ def main():
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         output_dir = f"infra_map_{safe_target}_{timestamp}"
 
-    # Save files
+    # ---- Probe discovered domains ----
+    probe_results = {}
+    all_domains = sorted(set(n.value for n in graph.nodes_by_type(NodeType.DOMAIN)))
+
+    if (args.probe or args.scan) and all_domains:
+        from infra_map.probe import DomainProbe
+
+        if not args.quiet and not args.json_only:
+            log_phase = lambda n: print(f"\n{C.BOLD}[{n}]{C.RESET} ", end="", flush=True)
+            log_phase("PROBE")
+            print(f"Checking {len(all_domains)} domains for liveness, CDN, parking...")
+
+        prober = DomainProbe(session, timeout=timeout)
+
+        def probe_progress(done, total):
+            if not args.quiet and not args.json_only:
+                print(f"\r  {C.DIM}Probed {done}/{total}{C.RESET}    ", end="", flush=True)
+
+        probe_results = prober.probe_domains(all_domains, progress_callback=probe_progress)
+
+        # Categorize results
+        live = [d for d, r in probe_results.items() if r["status"] == "live" and not r["parked"]]
+        cdn_domains = [d for d, r in probe_results.items() if r["cdn"]]
+        parked = [d for d, r in probe_results.items() if r["parked"]]
+        dead = [d for d, r in probe_results.items() if r["status"] in ("dns_failed", "http_failed")]
+        scannable = [d for d, r in probe_results.items() if r["scannable"]]
+
+        # Shared hosting detection — group by IP
+        ip_to_domains = {}
+        for d, r in probe_results.items():
+            if r["ip"]:
+                ip_to_domains.setdefault(r["ip"], []).append(d)
+        shared_ips = {ip: domains for ip, domains in ip_to_domains.items() if len(domains) >= 2}
+
+        if not args.quiet and not args.json_only:
+            print(f"\r  {C.GREEN}{len(live)} live{C.RESET}, "
+                  f"{C.CYAN}{len(cdn_domains)} CDN-proxied{C.RESET}, "
+                  f"{C.YELLOW}{len(parked)} parked{C.RESET}, "
+                  f"{C.DIM}{len(dead)} dead{C.RESET}, "
+                  f"{C.GREEN}{len(scannable)} scannable{C.RESET}           ")
+
+            if shared_ips:
+                print(f"\n{C.BOLD}Shared hosting ({len(shared_ips)} IPs with multiple domains):{C.RESET}")
+                for ip, domains in sorted(shared_ips.items(), key=lambda x: -len(x[1]))[:5]:
+                    print(f"  {C.CYAN}{ip}{C.RESET} → {', '.join(domains[:5])}"
+                          f"{'...' if len(domains) > 5 else ''}")
+
+            if parked:
+                print(f"\n{C.BOLD}Parked/expired ({len(parked)}):{C.RESET} {C.YELLOW}potential takeover candidates{C.RESET}")
+                for d in parked[:5]:
+                    title = probe_results[d].get("title", "")
+                    print(f"  {C.YELLOW}{d}{C.RESET}{f' — {title}' if title else ''}")
+                if len(parked) > 5:
+                    print(f"  {C.DIM}...and {len(parked) - 5} more{C.RESET}")
+
+            if dead:
+                print(f"\n{C.BOLD}Dead/unreachable ({len(dead)}):{C.RESET} {C.DIM}dangling DNS?{C.RESET}")
+                for d in dead[:5]:
+                    print(f"  {C.DIM}{d}{C.RESET}")
+                if len(dead) > 5:
+                    print(f"  {C.DIM}...and {len(dead) - 5} more{C.RESET}")
+
+    # ---- Save files ----
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
 
@@ -269,15 +335,64 @@ def main():
         ips_path = os.path.join(output_dir, "ips.txt")
         ip_count = write_ips(graph, ips_path)
 
-        print(f"\n{C.BOLD}Output files:{C.RESET}")
-        print(f"  {C.CYAN}Graph:{C.RESET}     {json_path}")
-        print(f"  {C.CYAN}Domains:{C.RESET}   {domains_path} ({domain_count} domains)")
-        print(f"  {C.CYAN}IPs:{C.RESET}       {ips_path} ({ip_count} IPs)")
+        # Save probe results if available
+        if probe_results:
+            import json as json_mod
+            probe_path = os.path.join(output_dir, "probe_results.json")
+            with open(probe_path, "w") as pf:
+                json_mod.dump(probe_results, pf, indent=2)
 
-        # Hint: feed domains into sqli_recon
-        if domain_count > 0:
-            print(f"\n{C.BOLD}Next step — scan discovered domains:{C.RESET}")
-            print(f"  {C.GREEN}while read d; do ./scan -u \"http://$d\" --quick; done < {domains_path}{C.RESET}")
+            # Save scannable domains separately
+            scannable_path = os.path.join(output_dir, "scannable.txt")
+            scannable_domains = [d for d, r in probe_results.items() if r["scannable"]]
+            with open(scannable_path, "w") as sf:
+                sf.write("\n".join(sorted(scannable_domains)) + "\n" if scannable_domains else "")
+
+        print(f"\n{C.BOLD}Output:{C.RESET}")
+        print(f"  {C.CYAN}Graph:{C.RESET}       {json_path}")
+        print(f"  {C.CYAN}Domains:{C.RESET}     {domains_path} ({domain_count} total)")
+        if probe_results:
+            print(f"  {C.CYAN}Probe:{C.RESET}       {probe_path}")
+            print(f"  {C.CYAN}Scannable:{C.RESET}   {scannable_path} ({len(scannable_domains)} domains)")
+        print(f"  {C.CYAN}IPs:{C.RESET}         {ips_path} ({ip_count} IPs)")
+
+    # ---- Auto-scan if requested ----
+    if args.scan and probe_results:
+        scannable_domains = [d for d, r in probe_results.items() if r["scannable"]]
+        if scannable_domains:
+            if not args.quiet and not args.json_only:
+                print(f"\n{C.BOLD}Auto-scanning {len(scannable_domains)} scannable domains...{C.RESET}")
+
+            scan_output_base = output_dir or "."
+            for i, domain in enumerate(scannable_domains):
+                scheme = "https" if probe_results[domain]["http_code"] else "http"
+                scan_url = f"{scheme}://{domain}"
+                scan_dir = os.path.join(scan_output_base, f"scan_{domain.replace('.', '-')}")
+
+                if not args.quiet and not args.json_only:
+                    tech = ", ".join(probe_results[domain].get("tech", [])) or "unknown"
+                    print(f"\n  [{i+1}/{len(scannable_domains)}] {C.GREEN}{scan_url}{C.RESET} ({tech})")
+
+                scan_args = ["python", "-m", "sqli_recon", "-u", scan_url, "--quick", "-o", scan_dir]
+                if args.tor:
+                    scan_args.append("--tor")
+                if proxy:
+                    scan_args.extend(["--proxy", proxy])
+
+                import subprocess
+                subprocess.run(scan_args, timeout=300, capture_output=not args.verbose)
+        else:
+            if not args.quiet and not args.json_only:
+                print(f"\n{C.YELLOW}No scannable domains found (all CDN-proxied, parked, or dead){C.RESET}")
+    elif not args.scan and not args.json_only and probe_results:
+        scannable_domains = [d for d, r in probe_results.items() if r["scannable"]]
+        if scannable_domains and output_dir:
+            print(f"\n{C.BOLD}Scan scannable domains:{C.RESET}")
+            print(f"  {C.GREEN}while read d; do ./scan -u \"http://$d\" --quick; done < {os.path.join(output_dir, 'scannable.txt')}{C.RESET}")
+    elif not probe_results and not args.json_only and output_dir:
+        print(f"\n{C.BOLD}Next steps:{C.RESET}")
+        print(f"  {C.GREEN}./map {target} --probe{C.RESET}           # check which domains are live")
+        print(f"  {C.GREEN}./map {target} --probe --scan{C.RESET}    # probe + auto-scan live ones")
 
 
 if __name__ == "__main__":
