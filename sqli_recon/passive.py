@@ -83,6 +83,25 @@ _p(".env File", r"\.env(?:\.|['\"\s])", "medium")
 _p("TODO/FIXME/HACK", r"(?://|#|/\*)\s*(?:TODO|FIXME|HACK|XXX|BUG|SECURITY)\b[^\n]{0,100}", "low")
 _p("Credentials in Comment", r"(?://|#|/\*)\s*(?:password|passwd|pwd|secret|key|token)\s*[:=]\s*\S+", "high")
 
+# -- Deserialization attack surfaces --
+# These detect serialized data formats in responses/hidden fields/cookies.
+# Finding serialized data = potential deserialization vulnerability.
+# Exploitation requires ysoserial (Java), phpggc (PHP), or manual crafting.
+
+# Java serialized objects: base64-encoded magic bytes (0xACED0005 = rO0AB)
+_p("Java Serialized Object (base64)", r"rO0AB[A-Za-z0-9+/=]{20,}", "high", 0)
+# Java serialized objects: hex-encoded magic bytes
+_p("Java Serialized Object (hex)", r"aced0005[0-9a-f]{16,}", "high")
+# PHP serialized data: O:N:"ClassName":N:{...} or a:N:{s:N:...}
+_p("PHP Serialized Data", r'(?:^|[=&;"\s])(?:O:\d+:"[A-Z]\w+":\d+:\{|a:\d+:\{(?:s:\d+:|i:\d+;))', "high")
+# .NET ViewState — unencrypted/unsigned ViewState is exploitable via deserialization
+_p(".NET ViewState", r'__VIEWSTATE[^>]*value="[A-Za-z0-9+/=]{50,}"', "high")
+_p(".NET ViewState (MAC disabled)", r'__VIEWSTATEGENERATOR|enableviewstatemac\s*=\s*["\']?false', "high")
+# Python serialized data (base64-encoded, detection only — not loading/executing anything)
+_p("Python Serialized Data (base64)", r'gASV[A-Za-z0-9+/=]{20,}', "high", 0)
+# Large base64 blobs in form fields/cookies — often serialized objects
+_p("Large Base64 Blob (possible serialized)", r'(?:value|cookie|token|data|session)\s*[=:]\s*["\']?[A-Za-z0-9+/=]{200,}', "medium")
+
 
 class PassiveAnalyzer:
     """Analyzes response bodies during crawl for leaked information."""

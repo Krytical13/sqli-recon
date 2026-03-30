@@ -224,12 +224,14 @@ echo "[+] Installing sqlmap..."
 pip install sqlmap -q 2>&1 | tail -1
 
 echo "[+] Installing commix..."
-pip install git+https://github.com/commixproject/commix.git -q 2>&1 | tail -1
+pip install git+https://github.com/commixproject/commix.git -q 2>&1 | tail -1 \
+    || echo "[*] commix install failed — command injection testing will be skipped"
 
 echo "[+] Installing tplmap..."
 TPLMAP_DIR="$SCRIPT_DIR/tools/tplmap"
 if [ ! -d "$TPLMAP_DIR" ]; then
-    git clone --depth 1 https://github.com/epinna/tplmap.git "$TPLMAP_DIR" 2>&1 | tail -1
+    git clone --depth 1 https://github.com/epinna/tplmap.git "$TPLMAP_DIR" 2>&1 | tail -1 \
+        || echo "[*] tplmap clone failed — SSTI testing will be skipped"
 fi
 # Install tplmap deps (ignore wsgiref build error — Python 2 leftover)
 pip install pyyaml -q 2>/dev/null
