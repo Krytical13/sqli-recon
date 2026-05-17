@@ -13,3 +13,7 @@ tests/tor_scan_results/
 *.png
 map
 tools/
+
+# bench harness runtime artifacts
+bench/last_run.log
+bench/baseline.json.tmp

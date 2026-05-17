@@ -1,0 +1,6 @@
+# Regression detection threshold. Any per-metric drop greater than this fails.
+regression_threshold = 0.05
+
+# Per-app overrides (optional)
+# [apps.dvwa]
+# regression_threshold = 0.08

@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 headless = ["playwright>=1.40.0"]
+bench = ["pyyaml>=6.0"]
 
 [project.scripts]
 sqli-recon = "sqli_recon.cli:main"
@@ -25,3 +26,7 @@ infra-map = "infra_map.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["sqli_recon*", "infra_map*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+addopts = "--import-mode=importlib"
