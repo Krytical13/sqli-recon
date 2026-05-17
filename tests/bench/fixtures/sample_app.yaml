@@ -1,0 +1,10 @@
+name: testapp
+kind: docker
+image: example/test:latest
+port: 8080
+healthcheck:
+  url: http://127.0.0.1:8080/health
+  timeout: 30
+setup:
+  - {http: POST, path: /admin/reset}
+teardown: []

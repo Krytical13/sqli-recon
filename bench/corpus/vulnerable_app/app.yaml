@@ -1,0 +1,9 @@
+name: vulnerable_app
+kind: process
+command: ["python3", "tests/vulnerable_app.py"]
+port: 18484
+healthcheck:
+  url: http://127.0.0.1:18484/
+  timeout: 15
+setup: []
+teardown: []
