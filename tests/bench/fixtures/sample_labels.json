@@ -1,0 +1,20 @@
+[
+  {
+    "app": "vulnerable_app",
+    "url_path": "/users",
+    "method": "GET",
+    "parameter": "id",
+    "location": "query",
+    "vuln_types": ["sqli"],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/about",
+    "method": "GET",
+    "parameter": "",
+    "location": "query",
+    "vuln_types": [],
+    "context": {"note": "clean endpoint, no params"}
+  }
+]
