@@ -31,3 +31,7 @@ include = ["sqli_recon*", "infra_map*"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 addopts = "--import-mode=importlib"
+markers = [
+    "integration: integration tests requiring live services",
+    "dvwa: tests requiring DVWA in docker",
+]

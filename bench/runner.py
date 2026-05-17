@@ -33,6 +33,12 @@ def run_for_app(
     with app_for_config(config, cwd=cwd) as handle:
         client = HttpClient(timeout=10, rate_limit=0.0)
 
+        # App-specific session bootstrap if applicable
+        if config.name == "dvwa":
+            from bench.corpus.dvwa.bootstrap import bootstrap_session
+            if not bootstrap_session(client, handle.base_url):
+                log.error("DVWA session bootstrap failed — results will be unreliable")
+
         if layer in ("a", "both"):
             log.info(f"Running Layer A on {config.name}")
             found_a = run_layer_a(labels, handle.base_url, client, detector_filter)

@@ -8,6 +8,22 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.mark.integration
+@pytest.mark.dvwa
+def test_run_for_dvwa():
+    """Full harness against DVWA in docker. Requires docker + DVWA image pre-pulled."""
+    import shutil
+    if not shutil.which("docker"):
+        pytest.skip("docker not installed")
+    cfg = load_app_config(REPO_ROOT / "bench" / "corpus" / "dvwa" / "app.yaml")
+    scores = run_for_app(cfg, layer="a", cwd=REPO_ROOT)  # Layer A only for speed
+
+    assert "dvwa" in scores
+    assert "ErrorDetector" in scores["dvwa"]
+    isolated_recall = scores["dvwa"]["ErrorDetector"]["isolated"]["recall"]
+    assert isolated_recall > 0
+
+
+@pytest.mark.integration
 def test_run_for_vulnerable_app():
     """Full harness against the real vulnerable_app. Slow."""
     cfg = load_app_config(REPO_ROOT / "bench" / "corpus" / "vulnerable_app" / "app.yaml")
