@@ -25,6 +25,7 @@ recon-gather = "sqli_recon.gather:main"
 infra-map = "infra_map.cli:main"
 
 [tool.setuptools.packages.find]
+# bench/ is a dev-only accuracy harness — not included in the distribution wheel
 include = ["sqli_recon*", "infra_map*"]
 
 [tool.pytest.ini_options]

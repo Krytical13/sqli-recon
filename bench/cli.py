@@ -1,6 +1,8 @@
 """CLI entry point for the detector accuracy harness."""
 import argparse
 
+from bench import __version__
+
 
 def build_parser():
     p = argparse.ArgumentParser(
@@ -26,5 +28,5 @@ def build_parser():
 def main():
     parser = build_parser()
     args = parser.parse_args()
-    print(f"bench v0.1.0 — placeholder (args: {vars(args)})")
+    print(f"bench v{__version__} — placeholder (args: {vars(args)})")
     return 0
