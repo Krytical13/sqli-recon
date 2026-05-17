@@ -36,3 +36,15 @@ def test_load_labels_rejects_unknown_vuln_type():
             load_labels(bad_path)
     finally:
         bad_path.unlink()
+
+
+def test_load_labels_rejects_missing_required_field():
+    import pytest
+    bad = [{"app": "x", "url_path": "/", "location": "query", "vuln_types": []}]
+    bad_path = FIXTURE.parent / "bad_missing_field.json"
+    bad_path.write_text(json.dumps(bad))
+    try:
+        with pytest.raises(ValueError, match="missing required field"):
+            load_labels(bad_path)
+    finally:
+        bad_path.unlink()
