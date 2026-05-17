@@ -65,6 +65,7 @@ def close_db(exception):
 
 # ---- HTML pages (crawlable) ----
 
+# VULN: clean
 @app.route("/")
 def index():
     return """<!DOCTYPE html>
@@ -94,6 +95,9 @@ def index():
 </html>"""
 
 
+# VULN: vuln_type=sqli, param=category, location=query
+# VULN: vuln_type=sqli, param=sort, location=query
+# VULN: vuln_type=sqli, param=order, location=query
 @app.route("/products")
 def products_page():
     db = get_db()
@@ -126,6 +130,7 @@ def products_page():
     return html
 
 
+# VULN: vuln_type=sqli, param=product_id, location=path
 @app.route("/products/<int:product_id>")
 def product_detail(product_id):
     db = get_db()
@@ -142,6 +147,7 @@ def product_detail(product_id):
     </body></html>"""
 
 
+# VULN: vuln_type=sqli, param=q, location=query
 @app.route("/search")
 def search_page():
     db = get_db()
@@ -172,6 +178,7 @@ def search_page():
     </body></html>"""
 
 
+# VULN: vuln_type=sqli, param=username, location=body
 @app.route("/login", methods=["GET", "POST"])
 def login_page():
     error = ""
@@ -203,6 +210,9 @@ def login_page():
     </body></html>"""
 
 
+# VULN: vuln_type=sqli, param=user_id, location=query
+# VULN: vuln_type=sqli, param=status, location=query
+# VULN: vuln_type=sqli, param=sort_by, location=query
 @app.route("/orders")
 def orders_page():
     user_id = request.args.get("user_id", "")
@@ -235,6 +245,7 @@ def orders_page():
     return html
 
 
+# VULN: clean
 @app.route("/admin/dashboard")
 def admin_dashboard():
     return """<html><body>
@@ -250,6 +261,7 @@ def admin_dashboard():
     </body></html>"""
 
 
+# VULN: vuln_type=sqli, param=role, location=query
 @app.route("/admin/users")
 def admin_users():
     db = get_db()
@@ -267,6 +279,12 @@ def admin_users():
 
 # ---- REST API ----
 
+# VULN: vuln_type=sqli, param=category, location=query
+# VULN: vuln_type=sqli, param=sort, location=query
+# VULN: vuln_type=sqli, param=min_price, location=query
+# VULN: vuln_type=sqli, param=max_price, location=query
+# VULN: vuln_type=sqli, param=limit, location=query
+# VULN: vuln_type=sqli, param=offset, location=query
 @app.route("/api/v1/products", methods=["GET"])
 def api_products():
     db = get_db()
@@ -296,6 +314,7 @@ def api_products():
         return jsonify({"error": str(e)}), 500
 
 
+# VULN: vuln_type=sqli, param=product_id, location=path
 @app.route("/api/v1/products/<int:product_id>")
 def api_product_detail(product_id):
     db = get_db()
@@ -305,6 +324,8 @@ def api_product_detail(product_id):
     return jsonify(dict(row))
 
 
+# VULN: vuln_type=sqli, param=role, location=query
+# VULN: vuln_type=sqli, param=limit, location=query
 @app.route("/api/v1/users", methods=["GET"])
 def api_users():
     db = get_db()
@@ -318,6 +339,7 @@ def api_users():
     return jsonify([dict(r) for r in rows])
 
 
+# VULN: vuln_type=sqli, param=user_id, location=path
 @app.route("/api/v1/users/<int:user_id>")
 def api_user_detail(user_id):
     db = get_db()
@@ -327,6 +349,9 @@ def api_user_detail(user_id):
     return jsonify(dict(row))
 
 
+# VULN: vuln_type=sqli, param=query, location=json
+# VULN: vuln_type=sqli, param=field, location=json
+# VULN: vuln_type=sqli, param=limit, location=json
 @app.route("/api/v1/search", methods=["POST"])
 def api_search():
     data = request.get_json(silent=True) or {}
@@ -344,6 +369,9 @@ def api_search():
         return jsonify({"error": str(e)}), 500
 
 
+# VULN: vuln_type=sqli, param=user_id, location=query
+# VULN: vuln_type=sqli, param=status, location=query
+# VULN: vuln_type=sqli, param=sort, location=query
 @app.route("/api/v1/orders", methods=["GET"])
 def api_orders():
     db = get_db()
@@ -368,18 +396,21 @@ def api_orders():
         return jsonify({"error": str(e)}), 500
 
 
+# VULN: clean
 @app.route("/api/v1/stats")
 def api_stats():
     r = request.args.get("range", "7d")
     return jsonify({"range": r, "visits": 1234, "orders": 56})
 
 
+# VULN: clean
 @app.route("/api/v1/reports", methods=["POST"])
 def api_reports():
     data = request.get_json(silent=True) or {}
     return jsonify({"status": "generated", "type": data.get("type", "unknown")})
 
 
+# VULN: clean
 @app.route("/internal/debug")
 def internal_debug():
     verbose = request.args.get("verbose", "false")

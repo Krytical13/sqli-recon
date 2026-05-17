@@ -1,0 +1,344 @@
+[
+  {
+    "app": "vulnerable_app",
+    "url_path": "/",
+    "method": "GET",
+    "parameter": "",
+    "location": "query",
+    "vuln_types": [],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/products",
+    "method": "GET",
+    "parameter": "category",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/products",
+    "method": "GET",
+    "parameter": "sort",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/products",
+    "method": "GET",
+    "parameter": "order",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/products/<int:product_id>",
+    "method": "GET",
+    "parameter": "product_id",
+    "location": "path",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/search",
+    "method": "GET",
+    "parameter": "q",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/login",
+    "method": "GET",
+    "parameter": "username",
+    "location": "body",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/login",
+    "method": "POST",
+    "parameter": "username",
+    "location": "body",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/orders",
+    "method": "GET",
+    "parameter": "user_id",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/orders",
+    "method": "GET",
+    "parameter": "status",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/orders",
+    "method": "GET",
+    "parameter": "sort_by",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/admin/dashboard",
+    "method": "GET",
+    "parameter": "",
+    "location": "query",
+    "vuln_types": [],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/admin/users",
+    "method": "GET",
+    "parameter": "role",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/api/v1/products",
+    "method": "GET",
+    "parameter": "category",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/api/v1/products",
+    "method": "GET",
+    "parameter": "sort",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/api/v1/products",
+    "method": "GET",
+    "parameter": "min_price",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/api/v1/products",
+    "method": "GET",
+    "parameter": "max_price",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/api/v1/products",
+    "method": "GET",
+    "parameter": "limit",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/api/v1/products",
+    "method": "GET",
+    "parameter": "offset",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/api/v1/products/<int:product_id>",
+    "method": "GET",
+    "parameter": "product_id",
+    "location": "path",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/api/v1/users",
+    "method": "GET",
+    "parameter": "role",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/api/v1/users",
+    "method": "GET",
+    "parameter": "limit",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/api/v1/users/<int:user_id>",
+    "method": "GET",
+    "parameter": "user_id",
+    "location": "path",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/api/v1/search",
+    "method": "POST",
+    "parameter": "query",
+    "location": "json",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/api/v1/search",
+    "method": "POST",
+    "parameter": "field",
+    "location": "json",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/api/v1/search",
+    "method": "POST",
+    "parameter": "limit",
+    "location": "json",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/api/v1/orders",
+    "method": "GET",
+    "parameter": "user_id",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/api/v1/orders",
+    "method": "GET",
+    "parameter": "status",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/api/v1/orders",
+    "method": "GET",
+    "parameter": "sort",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/api/v1/stats",
+    "method": "GET",
+    "parameter": "",
+    "location": "query",
+    "vuln_types": [],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/api/v1/reports",
+    "method": "POST",
+    "parameter": "",
+    "location": "query",
+    "vuln_types": [],
+    "context": {}
+  },
+  {
+    "app": "vulnerable_app",
+    "url_path": "/internal/debug",
+    "method": "GET",
+    "parameter": "",
+    "location": "query",
+    "vuln_types": [],
+    "context": {}
+  }
+]
