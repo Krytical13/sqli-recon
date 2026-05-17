@@ -1,0 +1,74 @@
+[
+  {
+    "app": "dvwa",
+    "url_path": "/vulnerabilities/sqli/",
+    "method": "GET",
+    "parameter": "id",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {
+      "category": "sqli"
+    }
+  },
+  {
+    "app": "dvwa",
+    "url_path": "/vulnerabilities/sqli_blind/",
+    "method": "GET",
+    "parameter": "id",
+    "location": "query",
+    "vuln_types": [
+      "sqli"
+    ],
+    "context": {
+      "category": "sqli_blind"
+    }
+  },
+  {
+    "app": "dvwa",
+    "url_path": "/vulnerabilities/exec/",
+    "method": "POST",
+    "parameter": "ip",
+    "location": "body",
+    "vuln_types": [
+      "cmdi"
+    ],
+    "context": {
+      "category": "exec"
+    }
+  },
+  {
+    "app": "dvwa",
+    "url_path": "/index.php",
+    "method": "GET",
+    "parameter": "",
+    "location": "query",
+    "vuln_types": [],
+    "context": {
+      "clean": true
+    }
+  },
+  {
+    "app": "dvwa",
+    "url_path": "/about.php",
+    "method": "GET",
+    "parameter": "",
+    "location": "query",
+    "vuln_types": [],
+    "context": {
+      "clean": true
+    }
+  },
+  {
+    "app": "dvwa",
+    "url_path": "/instructions.php",
+    "method": "GET",
+    "parameter": "",
+    "location": "query",
+    "vuln_types": [],
+    "context": {
+      "clean": true
+    }
+  }
+]

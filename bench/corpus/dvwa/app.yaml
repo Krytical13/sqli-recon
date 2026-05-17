@@ -1,0 +1,12 @@
+name: dvwa
+kind: docker
+image: vulnerables/web-dvwa:latest
+port: 8080
+healthcheck:
+  url: http://127.0.0.1:8080/login.php
+  timeout: 60
+setup:
+  - {http: GET, path: /setup.php}
+  - {http: POST, path: /setup.php, data: {create_db: "Create / Reset Database"}}
+  # Login + security-level setting happens at scan time (Task 11)
+teardown: []
