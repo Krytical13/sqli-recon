@@ -73,6 +73,14 @@ def test_diff_vs_baseline_no_regression():
     assert regressions == []
 
 
+def test_compare_unknown_detector_returns_zeros():
+    """A detector name not in DETECTOR_VULN_TYPE produces all zeros, no exception."""
+    labels = [_label("app", "/users", "id", [VulnType.SQLI])]
+    found = {"BogusDetector": {("/users", "GET", "id")}}
+    result = compare(found, labels)
+    assert result["BogusDetector"] == {"tp": 0, "fp": 0, "fn": 0}
+
+
 def test_diff_vs_baseline_detects_regression():
     baseline = {"app": {"ErrorDetector": {"isolated": {"precision": 0.9, "recall": 0.8, "f1": 0.85}}}}
     current = {"app": {"ErrorDetector": {"isolated": {"precision": 0.6, "recall": 0.8, "f1": 0.69}}}}

@@ -4,10 +4,13 @@ compare(): findings vs labels -> per-detector TP/FP/FN counts
 score():   counts -> precision/recall/f1
 diff_vs_baseline(): current scores vs prior baseline -> regressions
 """
+import logging
 from typing import Dict, List, Set, Tuple
 
 from bench.label import Label
 from sqli_recon.models import VulnType
+
+log = logging.getLogger(__name__)
 
 
 # Which VulnType each detector confirms — used to attribute Layer B findings
@@ -45,10 +48,15 @@ def compare(
     result = {}
     for detector_name, found_set in found.items():
         expected_vuln_type = DETECTOR_VULN_TYPE.get(detector_name)
+        if expected_vuln_type is None:
+            log.warning("Unknown detector %s; skipping", detector_name)
+            result[detector_name] = {"tp": 0, "fp": 0, "fn": 0}
+            continue
         tp = fp = fn = 0
 
         for finding_key in found_set:
             if finding_key not in label_index:
+                log.debug("Finding outside labels (no ground truth), dropped: %s", finding_key)
                 continue
             label_vuln_types = label_index[finding_key]
             if expected_vuln_type in label_vuln_types:
