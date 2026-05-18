@@ -1,0 +1,47 @@
+{
+  "vulnerable_app": {
+    "ErrorDetector": {
+      "isolated": {
+        "precision": 1.0,
+        "recall": 0.1111,
+        "f1": 0.2
+      },
+      "end_to_end": {
+        "precision": 1.0,
+        "recall": 0.1481,
+        "f1": 0.2581
+      }
+    },
+    "SSTIDetector": {
+      "isolated": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "end_to_end": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      }
+    },
+    "CommandInjectionDetector": {
+      "isolated": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "end_to_end": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      }
+    },
+    "HeaderInjectionScanner": {
+      "end_to_end": {
+        "precision": 1.0,
+        "recall": 0.1481,
+        "f1": 0.2581
+      }
+    }
+  }
+}
